@@ -41,13 +41,16 @@ def update_post(db, post: Post) -> None:
 
 
 def candidates(db, sources: list[str], window_hours: float) -> list[Post]:
-    """Posts from any of the given sources, newest first, within the window."""
+    """Posts from any of the given sources, newest first, within the window. extra["sources"] lists where each was seen."""
     since = time.time() - window_hours * 3600
     wanted = set(sources)
     out = []
     for row in db.q("select sources, data from posts where created_at > ? order by created_at desc", (since,)):
-        if wanted & set(json.loads(row["sources"])):
-            out.append(Post.from_dict(json.loads(row["data"])))
+        srcs = json.loads(row["sources"])
+        if wanted & set(srcs):
+            p = Post.from_dict(json.loads(row["data"]))
+            p.extra["sources"] = srcs
+            out.append(p)
     return out
 
 

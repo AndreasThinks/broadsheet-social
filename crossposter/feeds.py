@@ -4,10 +4,14 @@ A feed file defines `feed = Feed(...)`, an optional `keep(post, ctx) -> bool` an
 `score(post, ctx)` that returns a number, or a dict of named numbers (shown as the
 "why am I seeing this" breakdown). Files reload automatically when you save them.
 
+Starter feeds ship in the repo's feeds/ folder; any your feeds folder doesn't have yet are offered
+under "Add more feeds" on the Feeds page. Tab order and which feeds show on Home are saved in the
+database (feed_prefs), not in the files.
+
 Sources a feed can draw from:
     bluesky:following      bluesky:discover        bluesky:feed:<at:// uri>   bluesky:list:<at:// uri>
     mastodon:home          mastodon:local          mastodon:public            mastodon:trending
-    mastodon:list:<id>     mastodon:tag:<name>     x:home (experimental, costs money)
+    mastodon:list:<id>     mastodon:tag:<name>     x:home (costs money)
 """
 from __future__ import annotations
 
@@ -19,6 +23,7 @@ import math
 import sys
 import time
 from collections import defaultdict
+from urllib.parse import urlsplit
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable
@@ -55,8 +60,10 @@ class Ctx:
             self._eng[p.network].append(p.engagement)
         for v in self._eng.values():
             v.sort()
+        self._spread: dict[str, dict[str, set[str]]] | None = None
 
     def age_hours(self, post: Post) -> float:
+        """How many hours ago the post was made."""
         return max(0.0, (self.now - post.created_at) / 3600)
 
     def normalised_engagement(self, post: Post) -> float:
@@ -68,15 +75,81 @@ class Ctx:
         """Handles of people you follow who reposted or boosted this post, as seen in your timelines."""
         return list(dict.fromkeys(post.extra.get("boosted_by") or []))
 
+    @staticmethod
+    def seen_in(post: Post) -> list[str]:
+        """The sources this post was fetched from, e.g. ["bluesky:following", "bluesky:discover"]."""
+        return list(post.extra.get("sources") or [])
+
     def is_mine(self, post: Post) -> bool:
+        """True for posts from your own connected accounts."""
         return post.author.handle in self.my_handles
 
     def is_muted(self, post: Post) -> bool:
+        """True for authors on your muted list (they are already left out before keep() runs)."""
         return post.author.handle in self.muted
 
     @staticmethod
     def log1p(x: float) -> float:
+        """log(1 + x), clamped at 0: tames big counts like likes so one viral post doesn't swamp the rest."""
         return math.log1p(max(0.0, x))
+
+    @staticmethod
+    def links(post: Post) -> list[str]:
+        """The web links in a post (its link card and any links in the text), normalised so the same page matches."""
+        urls = ([post.card.url] if post.card else []) + [s.href for s in post.text if s.kind == "link" and s.href]
+        return list(dict.fromkeys(u for u in map(normalise_url, urls) if u))
+
+    @staticmethod
+    def tags(post: Post) -> list[str]:
+        """The hashtags in a post, lower case and without the #."""
+        return list(dict.fromkeys((s.target or s.text).lstrip("#").lower() for s in post.text if s.kind == "tag"))
+
+    def _topics(self) -> dict[str, dict[str, set[str]]]:
+        if self._spread is None:
+            spread: dict[str, dict[str, set[str]]] = defaultdict(lambda: defaultdict(set))
+            for p in self.posts:
+                who = (p.reposted_by or p.author).handle
+                for topic in [f"link:{u}" for u in self.links(p)] + [f"tag:{t}" for t in self.tags(p)]:
+                    spread[topic][p.network].add(who)
+                    for o in p.also_on:
+                        spread[topic][o["network"]].add(p.author.handle)
+            self._spread = spread
+        return self._spread
+
+    def networks_discussing(self, post: Post) -> set[str]:
+        """Every network where this post, or a post sharing one of its links, shows up in this feed's candidates."""
+        nets = {post.network} | {o["network"] for o in post.also_on}
+        for u in self.links(post):
+            nets |= set(self._topics().get(f"link:{u}", {}))
+        return nets
+
+    def people_sharing_link(self, post: Post) -> int:
+        """How many different people (across every network) shared any of this post's links."""
+        who: set[str] = set()
+        for u in self.links(post):
+            for handles in self._topics().get(f"link:{u}", {}).values():
+                who |= handles
+        return len(who)
+
+    def tag_networks(self, tag: str) -> set[str]:
+        """The networks where a hashtag is being used in this feed's candidates."""
+        return set(self._topics().get(f"tag:{tag.lstrip('#').lower()}", {}))
+
+
+_TRACKING = ("utm_", "fbclid", "gclid", "ref_src", "mc_")
+
+
+def normalise_url(url: str) -> str:
+    """Strip scheme, www., tracking parameters and trailing slashes so two shares of one page compare equal."""
+    try:
+        u = urlsplit(url.strip())
+    except ValueError:
+        return ""
+    if not u.netloc:
+        return ""
+    host = u.netloc.lower().removeprefix("www.")
+    query = "&".join(q for q in u.query.split("&") if q and not q.lower().startswith(_TRACKING))
+    return host + u.path.rstrip("/") + ("?" + query if query else "")
 
 
 @dataclass
@@ -138,18 +211,73 @@ def all_feeds(feeds_dir: Path | None = None) -> list[LoadedFeed]:
     d = feeds_dir or settings.feeds_dir
     out = [COMBINED]
     paths = sorted(d.glob("*.py")) if d.exists() else []
-    for path in paths:
-        if path.name.startswith("_"):
-            continue
-        cached = _loaded.get(str(path))
-        if cached is None or cached.mtime != path.stat().st_mtime:
-            cached = _loaded[str(path)] = _load(path)
-        out.append(cached)
+    out += [_cached_load(path) for path in paths if not path.name.startswith("_")]
     return out
 
 
 def get_feed(slug: str, feeds_dir: Path | None = None) -> LoadedFeed | None:
     return next((f for f in all_feeds(feeds_dir) if f.slug == slug), None)
+
+
+STARTER_DIR = Path(__file__).resolve().parent.parent / "feeds"
+
+
+def _cached_load(path: Path) -> LoadedFeed:
+    cached = _loaded.get(str(path))
+    if cached is None or cached.mtime != path.stat().st_mtime:
+        cached = _loaded[str(path)] = _load(path)
+    return cached
+
+
+def starter_feeds(feeds_dir: Path | None = None, starter_dir: Path | None = None) -> list[LoadedFeed]:
+    """Bundled feeds that aren't in your feeds folder yet (new ones arrive with app updates)."""
+    d = feeds_dir or settings.feeds_dir
+    src = starter_dir or STARTER_DIR
+    if not src.exists() or (d.exists() and d.resolve() == src.resolve()):
+        return []
+    have = {p.stem for p in d.glob("*.py")} if d.exists() else set()
+    removed = {p.stem.removeprefix("_removed_") for p in d.glob("_removed_*.py")} if d.exists() else set()
+    return [_cached_load(p) for p in sorted(src.glob("*.py"))
+            if not p.name.startswith("_") and p.stem not in have and p.stem not in removed]
+
+
+def install_starter(slug: str, feeds_dir: Path | None = None, starter_dir: Path | None = None) -> bool:
+    d = feeds_dir or settings.feeds_dir
+    src = (starter_dir or STARTER_DIR) / f"{slug}.py"
+    if not src.is_file() or (d / src.name).exists():
+        return False
+    d.mkdir(parents=True, exist_ok=True)
+    (d / src.name).write_text(src.read_text())
+    (d / f"_removed_{slug}.py").unlink(missing_ok=True)
+    return True
+
+
+def remove_feed(slug: str, feeds_dir: Path | None = None) -> bool:
+    """Set a feed file aside as _removed_<slug>.py (ignored by the loader) rather than deleting it."""
+    d = feeds_dir or settings.feeds_dir
+    path = d / f"{slug}.py"
+    if not path.is_file():
+        return False
+    path.replace(d / f"_removed_{slug}.py")
+    _loaded.pop(str(path), None)
+    _results.pop(slug, None)
+    return True
+
+
+def arrange(loaded: list[LoadedFeed], prefs: dict) -> tuple[list[LoadedFeed], set[str]]:
+    """Order feeds by the saved order (unlisted ones keep file order, after), and return the hidden slugs."""
+    order = {slug: i for i, slug in enumerate(prefs.get("order") or [])}
+    ranked = sorted(enumerate(loaded), key=lambda t: (order.get(t[1].slug, len(order) + t[0]), t[0]))
+    return [lf for _, lf in ranked], set(prefs.get("hidden") or [])
+
+
+def move(prefs: dict, slugs: list[str], slug: str, step: int) -> dict:
+    order = [s for s in prefs.get("order") or [] if s in slugs] + [s for s in slugs if s not in (prefs.get("order") or [])]
+    if slug in order:
+        i = order.index(slug)
+        j = max(0, min(len(order) - 1, i + step))
+        order[i], order[j] = order[j], order[i]
+    return {**prefs, "order": order}
 
 
 @dataclass

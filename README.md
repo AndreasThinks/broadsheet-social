@@ -1,6 +1,6 @@
 # Cross-poster
 
-Read and post across Bluesky, Mastodon and (experimentally) X from one small, self-hosted app.
+Read and post across Bluesky, Mastodon and X from one small, self-hosted app.
 It is written in Python with [FastHTML](https://fastht.ml), runs on your laptop, and installs on
 your phone as a web app with real push notifications.
 
@@ -22,7 +22,7 @@ your phone as a web app with real push notifications.
   text elsewhere, so they never tag a stranger on X, or through [Bridgy Fed](https://fed.brid.gy)
   when the person is bridged. A preview under the composer shows what each network will get.
 - **Notifications** page plus Web Push to your phone and desktop.
-- **X (experimental)**: posting, and optionally reading, with a hard monthly spend cap.
+- **X**: posting, and optionally reading, with a hard monthly spend cap.
 
 ## Run it on your computer
 
@@ -69,6 +69,12 @@ On Linux, or to run from source: `pip install -r requirements-desktop.txt` then 
 
 A custom feed is a Python file in `feeds/` (on Railway, `/data/feeds`; the starter feeds are copied
 there on first boot). Edit them in the app under **Feeds**, or in your editor; changes apply on save.
+Starter feeds added in later versions show up under **Add more feeds** on the Feeds page, one tap to
+install. The Feeds page also sets the order of the tabs on Home, hides feeds from Home, copies a
+feed as the starting point for a new one, and removes feeds (the file is kept as `_removed_<name>.py`).
+
+Starter feeds: **Popular in my network**, **Links worth reading**, **Quiet posters**, and
+**Across networks** (links and topics turning up on Bluesky and Mastodon at the same time).
 
 ```python
 from crossposter.feeds import Feed, Post, Ctx
@@ -98,24 +104,36 @@ def score(post: Post, ctx: Ctx) -> dict:         # a number, or named terms that
   `quote`, `likes`, `reposts`, `replies`, `quotes`, `is_reply`, `reposted_by`, `network`, `lang`.
 - **Ctx** helpers: `age_hours`, `normalised_engagement` (0 to 1, compared within the post's own
   network, because Mastodon only reports counts your server has seen), `follows_who_engaged`
-  (people you follow who reposted it), `is_mine`, `is_muted`, `log1p`, and `ctx.posts`.
+  (people you follow who reposted it), `is_mine`, `is_muted`, `log1p`, and `ctx.posts`. For
+  cross-network feeds: `links` and `tags` (normalised), `networks_discussing` (every network where
+  the post or its link shows up), `people_sharing_link`, `tag_networks`, and `seen_in` (which
+  sources the post came from). The editor has a reference panel listing them all.
 - Feeds rank posts from a local cache that a background job keeps fresh (every 5 minutes, last 48
   hours), so they are fast and don't hammer the APIs. Ranking stops after `FEED_TIMEOUT_SECONDS`.
 
 Feed code runs on your server with full Python, which is the point. Only you can edit it, behind
 your app password; don't load feed files from people you don't trust.
 
-## X (experimental)
+## X
 
 X's API is pay-per-use: $0.005 per post read, $0.015 per post created, $0.20 for a post with a link
-([pricing](https://docs.x.com/x-api/getting-started/pricing), October 2026). To try it:
+([pricing](https://docs.x.com/x-api/getting-started/pricing), October 2026). One X app covers the
+web, desktop and Android versions:
 
-1. Create a project and app at developer.x.com, enable OAuth 2.0 (confidential client), set the
-   callback to `<BASE_URL>/auth/x/callback`, and buy some credit.
-2. Set `X_ENABLED=true`, `X_CLIENT_ID`, `X_CLIENT_SECRET` and optionally `X_MONTHLY_CAP_USD`
-   (default 10).
-3. Connect your account in Settings. Posting works straight away. Reading your timeline and mentions
-   is a separate switch, off by default; Settings shows what you've spent this month.
+1. At [developer.x.com](https://developer.x.com), create a project and app and buy some credit.
+2. In the app's *User authentication settings*, switch on OAuth 2.0 with **Read and write**
+   permissions. Choose **Native App** (a public client: only the client ID is needed, so it is safe
+   to type into the desktop and phone apps) or **Web App** (also gives a client secret).
+3. Add a callback URL for every place you'll sign in from. Settings shows the exact one for each:
+   - web: `<BASE_URL>/auth/x/callback`
+   - desktop: `http://127.0.0.1:47615/auth/x/callback`
+   - Android: `http://127.0.0.1:47616/auth/x/callback`
+4. Give the app the client ID (and secret for a Web App): either as `X_CLIENT_ID` and
+   `X_CLIENT_SECRET` on the server, or under Settings, X app credentials, where they're stored
+   encrypted. `X_MONTHLY_CAP_USD` sets the spend cap (default 10).
+5. Connect your account in Settings. Posting works straight away, and X is ticked in the composer
+   unless you switch that off. Reading your timeline and mentions is a separate switch, off by
+   default; Settings shows what you've spent this month. `X_ENABLED=false` hides X entirely.
 
 ## Settings reference
 

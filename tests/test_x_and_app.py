@@ -32,7 +32,8 @@ def client():
 
 
 def test_pages_render_in_demo_mode(client):
-    for path in ["/", "/timeline?custom=combined", "/timeline?custom=popular_in_my_network", "/compose",
+    for path in ["/", "/timeline?custom=combined", "/timeline?custom=popular_in_my_network",
+                 "/timeline?custom=across_networks", "/feeds/new/edit?start=across_networks", "/compose",
                  "/notifications", "/feeds", "/settings", "/feeds/new/edit",
                  "/timeline?feed=bluesky:following&acct=demo-bluesky", "/thread?key=demo-mastodon%7C1",
                  "/profile/bluesky/ada.bsky.social?acct=demo-bluesky"]:
@@ -66,6 +67,24 @@ def test_feed_preview(client):
     assert r.status_code == 200 and "candidates" in r.text
     r = client.post("/feeds/preview", data={"code": "feed = 1"})
     assert "must define" in r.text
+
+
+def test_feed_order_and_visibility(client):
+    from crossposter.app import db
+    try:
+        r = client.post("/feeds/quiet_posters/visibility")
+        assert r.status_code == 200 and "Show on Home" in r.text
+        assert 'href="/?custom=quiet_posters"' not in client.get("/").text
+        assert 'href="/?custom=quiet_posters"' in client.get("/?custom=quiet_posters").text
+        client.post("/feeds/quiet_posters/visibility")
+        assert 'href="/?custom=quiet_posters"' in client.get("/").text
+
+        client.post("/feeds/across_networks/move?step=-1")
+        home = client.get("/").text
+        assert home.index("?custom=across_networks") < home.index("?custom=combined")
+        assert "feed-bar" in home
+    finally:
+        db.set("feed_prefs", {})
 
 
 def test_password_protects_app(client):
