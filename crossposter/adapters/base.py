@@ -134,3 +134,7 @@ class NetworkAdapter(ABC):
 
     async def max_chars(self) -> int:
         return self.char_limit
+
+    async def search_people(self, q: str, limit: int = 6) -> list[Account]:
+        """Accounts matching a partial name or handle, for @mention autocomplete. Optional."""
+        return []
