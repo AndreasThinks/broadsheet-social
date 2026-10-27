@@ -13,7 +13,7 @@ from py_vapid import Vapid01
 from pywebpush import WebPushException, webpush
 
 from . import adapters as registry
-from . import cache, feeds
+from . import cache, feeds, people
 from .config import settings
 from .crypto import b64url
 from .models import Notification
@@ -85,6 +85,7 @@ def notification_url(n: Notification) -> str:
 
 def store_notifications(db, items: list[Notification]) -> list[Notification]:
     """Save notifications and return the ones not seen before."""
+    people.remember(db, [n.actor for n in items if n.actor])
     new = []
     for n in items:
         if db.one("select 1 from notifications where key=?", (n.key,)):

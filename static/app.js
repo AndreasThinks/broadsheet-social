@@ -1,4 +1,4 @@
-// Cross-poster client: service worker, video, composer counters, push sign-up.
+// Cross-poster client: service worker, video, composer counters and @mentions, push sign-up.
 (function () {
   "use strict";
 
@@ -40,8 +40,10 @@
     if (window.Intl && Intl.Segmenter) { var n = 0; for (var _ of new Intl.Segmenter().segment(s)) n++; return n; }
     return Array.from(s).length;
   }
+  var REMOTE_MENTION_RE = /(^|[^\w@\/])(@[A-Za-z0-9_]+)@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+/g;
   function lengthFor(network, text) {
     if (network === "mastodon" || network === "x") text = text.replace(URL_RE, "x".repeat(23));
+    if (network === "mastodon") text = text.replace(REMOTE_MENTION_RE, "$1$2");  // counted as @user
     return graphemes(text);
   }
   function updateCounts() {
@@ -70,6 +72,102 @@
       label.appendChild(field);
       holder.appendChild(label);
     });
+  }
+
+  // ---- Composer: @mention autocomplete ----
+  var NETWORK_NAMES = { bluesky: "Bluesky", mastodon: "Mastodon", x: "X" };
+  var menu = null, menuItems = [], menuIndex = 0, menuFor = null, menuStart = 0, menuTimer = null, menuSeq = 0;
+  function mentionQuery(ta) {
+    var before = ta.value.slice(0, ta.selectionStart);
+    var m = /(^|[^\w@\/])@([\w.-]*(?:@[\w.-]*)?)$/.exec(before);
+    return m ? { q: m[2], start: before.length - m[2].length - 1 } : null;
+  }
+  function chosenNetworks() {
+    var nets = [];
+    document.querySelectorAll("#compose-form .acct-box:checked").forEach(function (b) {
+      if (nets.indexOf(b.dataset.network) < 0) nets.push(b.dataset.network);
+    });
+    return nets;
+  }
+  function closeMenu() { if (menu) menu.hidden = true; menuItems = []; menuFor = null; }
+  function el(tag, cls, text) {
+    var e = document.createElement(tag);
+    if (cls) e.className = cls;
+    if (text) e.textContent = text;
+    return e;
+  }
+  function showMenu(ta, items) {
+    if (!menu) {
+      menu = el("ul", "mention-menu");
+      menu.setAttribute("role", "listbox");
+      document.body.appendChild(menu);
+      // mousedown, not click, so the textarea keeps focus
+      menu.addEventListener("mousedown", function (e) {
+        var li = e.target.closest("li");
+        if (li) { e.preventDefault(); pickMention(parseInt(li.dataset.i, 10)); }
+      });
+    }
+    menuItems = items; menuIndex = 0; menuFor = ta;
+    menu.innerHTML = "";
+    items.forEach(function (it, i) {
+      var li = el("li", i === 0 ? "active" : "");
+      li.dataset.i = i;
+      li.setAttribute("role", "option");
+      if (it.avatar) { var img = el("img", "avatar avatar-xs"); img.src = it.avatar; img.alt = ""; li.appendChild(img); }
+      else li.appendChild(el("span", "avatar avatar-xs avatar-blank", (it.name || "?").slice(0, 1).toUpperCase()));
+      var who = el("span", "who");
+      who.appendChild(el("strong", "", it.name));
+      var hs = el("small", "handles");
+      it.handles.forEach(function (h) {
+        hs.appendChild(el("span", "badge badge-" + h.network, NETWORK_NAMES[h.network] || h.network));
+        hs.appendChild(document.createTextNode(" @" + h.handle + " "));
+      });
+      if (it.linked && it.handles.length > 1) hs.appendChild(el("span", "linked", "linked"));
+      who.appendChild(hs);
+      li.appendChild(who);
+      menu.appendChild(li);
+    });
+    var r = ta.getBoundingClientRect();
+    menu.style.left = (r.left + window.scrollX) + "px";
+    menu.style.top = (r.bottom + window.scrollY + 4) + "px";
+    menu.style.width = r.width + "px";
+    menu.hidden = items.length === 0;
+  }
+  function moveMenu(step) {
+    if (!menuItems.length) return;
+    menuIndex = (menuIndex + step + menuItems.length) % menuItems.length;
+    Array.from(menu.children).forEach(function (li, i) { li.classList.toggle("active", i === menuIndex); });
+    menu.children[menuIndex].scrollIntoView({ block: "nearest" });
+  }
+  function pickMention(i) {
+    var ta = menuFor, it = menuItems[i];
+    if (!ta || !it) return;
+    var end = ta.selectionStart, insert = it.insert + " ";
+    ta.value = ta.value.slice(0, menuStart) + insert + ta.value.slice(end);
+    ta.selectionStart = ta.selectionEnd = menuStart + insert.length;
+    closeMenu();
+    ta.focus();
+    ta.dispatchEvent(new Event("input", { bubbles: true }));
+  }
+  function onMentionInput(ta) {
+    var m = mentionQuery(ta);
+    clearTimeout(menuTimer);
+    if (!m || !m.q) { closeMenu(); return; }
+    menuStart = m.start;
+    var seq = ++menuSeq;
+    menuTimer = setTimeout(function () {
+      var url = "/people/suggest?q=" + encodeURIComponent(m.q) + "&networks=" + encodeURIComponent(chosenNetworks().join(","));
+      fetch(url).then(function (r) { return r.json(); }).then(function (items) {
+        if (seq === menuSeq && document.activeElement === ta) showMenu(ta, items);
+      }).catch(function () {});
+    }, 150);
+  }
+  function onMentionKey(e) {
+    if (!menu || menu.hidden || e.target !== menuFor) return;
+    if (e.key === "ArrowDown") { e.preventDefault(); moveMenu(1); }
+    else if (e.key === "ArrowUp") { e.preventDefault(); moveMenu(-1); }
+    else if (e.key === "Enter" || e.key === "Tab") { e.preventDefault(); pickMention(menuIndex); }
+    else if (e.key === "Escape") { e.preventDefault(); closeMenu(); }
   }
 
   // ---- Push notifications ----
@@ -108,6 +206,11 @@
     init(document);
     document.addEventListener("input", function (e) {
       if (e.target.closest && e.target.closest("#compose-form")) updateCounts();
+      if (e.target.classList && e.target.classList.contains("mentionable")) onMentionInput(e.target);
+    });
+    document.addEventListener("keydown", onMentionKey);
+    document.addEventListener("focusout", function (e) {
+      if (e.target === menuFor) setTimeout(function () { if (document.activeElement !== menuFor) closeMenu(); }, 150);
     });
     document.addEventListener("change", function (e) {
       if (e.target.id === "images") updateAltFields(e.target);

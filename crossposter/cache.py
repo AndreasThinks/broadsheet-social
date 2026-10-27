@@ -6,6 +6,7 @@ import logging
 import re
 import time
 
+from . import people
 from .config import settings
 from .models import Post
 
@@ -27,6 +28,7 @@ def save_posts(db, posts: list[Post], source: str | None = None) -> None:
                 values(?, ?, ?, ?, ?, ?, ?, ?)
                 on conflict(key) do update set fetched_at=excluded.fetched_at, sources=excluded.sources,
                 data=excluded.data""", rows)
+    people.remember(db, [a for p in posts for a in (p.author, p.reposted_by, p.quote.author if p.quote else None) if a])
 
 
 def get_post(db, key: str) -> Post | None:

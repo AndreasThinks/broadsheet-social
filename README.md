@@ -15,6 +15,12 @@ your phone as a web app with real push notifications.
   score breakdown on every post.
 - **Cross-post** to any mix of accounts at once, with per-network character counts, optional
   per-network text, images with alt text, content warnings and automatic threading of long posts.
+- **Mentions that follow people across networks.** Type `@` in the composer to pick someone from the
+  people you've linked, accounts you've seen, or each network's search. Link a person's Bluesky,
+  Mastodon and X accounts (on their profile page, or under Settings → People) and a cross-post tags
+  them by the right handle on each network. Mentions of people you haven't linked are posted as plain
+  text elsewhere, so they never tag a stranger on X, or through [Bridgy Fed](https://fed.brid.gy)
+  when the person is bridged. A preview under the composer shows what each network will get.
 - **Notifications** page plus Web Push to your phone and desktop.
 - **X (experimental)**: posting, and optionally reading, with a hard monthly spend cap.
 

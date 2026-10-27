@@ -62,10 +62,10 @@ button:hover, .button:hover { border-color: var(--accent); text-decoration: none
 .primary:hover { filter: brightness(1.08); }
 .small { padding: 4px 10px; font-size: .85rem; }
 .danger { color: var(--danger); }
-input, textarea { font: inherit; color: var(--text); background: var(--panel); border: 1px solid var(--line);
+input, textarea, select { font: inherit; color: var(--text); background: var(--panel); border: 1px solid var(--line);
   border-radius: 10px; padding: 9px 11px; width: 100%; }
 input[type=checkbox] { width: auto; accent-color: var(--accent); }
-input:focus, textarea:focus { outline: 2px solid var(--accent); outline-offset: -1px; border-color: transparent; }
+input:focus, textarea:focus, select:focus { outline: 2px solid var(--accent); outline-offset: -1px; border-color: transparent; }
 textarea.code { font-size: .85rem; line-height: 1.5; tab-size: 4; }
 label { display: block; font-weight: 500; }
 label > input, label > textarea { margin-top: 4px; font-weight: 400; }
@@ -169,6 +169,21 @@ label > input, label > textarea { margin-top: 4px; font-weight: 400; }
 .acct-option .counter.over { color: var(--danger); font-weight: 600; }
 .overrides summary { cursor: pointer; color: var(--accent); }
 .overrides label { margin-top: 8px; }
+.mention-menu { position: absolute; z-index: 30; list-style: none; margin: 0; padding: 4px; max-height: 300px;
+  overflow-y: auto; background: var(--panel); border: 1px solid var(--line); border-radius: 12px;
+  box-shadow: 0 8px 24px rgba(0,0,0,.15); }
+.mention-menu li { display: flex; align-items: center; gap: 10px; padding: 6px 8px; border-radius: 8px; cursor: pointer; }
+.mention-menu li.active, .mention-menu li:hover { background: var(--accent-soft); }
+.mention-menu .avatar { width: 28px; height: 28px; }
+.mention-menu .who { display: flex; flex-direction: column; min-width: 0; }
+.mention-menu .handles { color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.mention-menu .badge { margin-right: 2px; }
+.mention-menu .linked { color: var(--ok); font-weight: 600; }
+.mention-preview { margin-top: 12px; }
+.mention-rows { list-style: none; padding: 0; margin: 0; display: flex; flex-direction: column; gap: 10px; }
+.mention-rows ul { list-style: none; padding: 4px 0 4px 12px; margin: 0; }
+.mention-rows li li { overflow-wrap: anywhere; }
+.mention-rows .how-plain small, .mention-rows .how-name small { color: var(--warn); }
 .images input[type=file] { padding: 8px; }
 #alt-fields input { margin-top: 6px; }
 
@@ -193,4 +208,10 @@ label > input, label > textarea { margin-top: 4px; font-weight: 400; }
 .checks { display: flex; flex-wrap: wrap; gap: 12px; margin: 10px 0; }
 .checks label { font-weight: 400; display: inline-flex; gap: 6px; align-items: center; }
 .preview { margin-top: 16px; }
+.handle-chip { display: inline-flex; gap: 4px; align-items: center; }
+.people-panel form.inline { display: inline; }
+.people-panel .link-form, .people-panel details { margin-top: 8px; }
+.link-form select { width: auto; }
+.people-panel summary, .person summary { cursor: pointer; color: var(--accent); }
+.person-form { margin-top: 8px; }
 .row > label:not(.grow) { display: inline-flex; gap: 6px; align-items: center; font-weight: 400; }

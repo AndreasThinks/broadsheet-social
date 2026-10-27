@@ -94,6 +94,11 @@ class DemoAdapter(NetworkAdapter):
     async def profile(self, handle):
         return next((p for p in _people() if p.handle == handle), _people()[0])
 
+    async def search_people(self, q, limit=6):
+        q = q.lower().lstrip("@")
+        return [p for p in _people() if p.network == self.network
+                and (q in p.handle.lower() or q in p.display_name.lower())][:limit]
+
     async def author_feed(self, handle, cursor=None):
         return Page(self._posts(11, 10), None)
 

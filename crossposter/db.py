@@ -37,6 +37,18 @@ create table if not exists x_usage (
     month text primary key, post_reads integer not null default 0, user_reads integer not null default 0,
     posts integer not null default 0, link_posts integer not null default 0
 );
+create table if not exists people (
+    id integer primary key autoincrement, name text not null default '', created_at real not null
+);
+create table if not exists person_handles (
+    person_id integer not null, network text not null, handle text not null,
+    primary key(network, handle)
+);
+create index if not exists person_handles_person on person_handles(person_id);
+create table if not exists seen_accounts (
+    network text not null, handle text not null, display_name text not null default '',
+    avatar text not null default '', last_seen real not null, primary key(network, handle)
+);
 """
 
 

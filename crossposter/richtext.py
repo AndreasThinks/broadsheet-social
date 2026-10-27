@@ -204,10 +204,16 @@ def plain_segments(text: str) -> list[Segment]:
 
 # ---------- Length rules ----------
 
+REMOTE_MENTION_RE = re.compile(r"(?<![\w@/])(@[A-Za-z0-9_]+)@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+")
+
+
 def length_for(network: str, text: str) -> int:
-    """Characters as each network counts them. Mastodon and X count every URL as 23."""
+    """Characters as each network counts them. Mastodon and X count every URL as 23, and Mastodon
+    counts @alice@example.social as just @alice."""
     if network in ("mastodon", "x"):
-        return len(URL_RE.sub("x" * 23, text))
+        text = URL_RE.sub("x" * 23, text)
+    if network == "mastodon":
+        text = REMOTE_MENTION_RE.sub(r"\1", text)
     return len(text)
 
 

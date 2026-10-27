@@ -12,12 +12,12 @@ from pathlib import Path
 from urllib.parse import quote, urlencode
 
 from fasthtml.common import (A, Beforeware, Button, Code, Details, Div, Form, H1, H2, H3, Hidden, Input, Label, Li,
-                             Link, Meta, P, Pre, Script, Section, Small, Span, Strong, Summary, Textarea, Ul,
-                             fast_app)
+                             Link, Meta, Option, P, Pre, Script, Section, Select, Small, Span, Strong, Summary, Textarea,
+                             Ul, fast_app)
 from starlette.responses import FileResponse, JSONResponse, RedirectResponse, Response
 
 from . import adapters as registry
-from . import cache, feeds, push
+from . import cache, feeds, people, push
 from .adapters import NetworkError, Upload
 from .adapters import bluesky as bsky
 from .adapters import bluesky_oauth, mastodon, x as xapi
@@ -264,7 +264,44 @@ async def get(network: str, handle: str, acct: str = ""):
                    A("Open on " + NETWORK_LABELS.get(network, network), href=safe(prof.url), target="_blank", rel="noopener")
                    if prof.url else None, cls="panel profile")
     src = "/profile-feed?" + urlencode({"handle": handle, "acct": a.account_id})
-    return shell(prof.name, head, Div(Div(Span(cls="spinner"), "Loading", cls="more"), hx_get=src, hx_trigger="load"))
+    people.remember(db, [prof])
+    return shell(prof.name, head, same_person_panel(network, prof, a.account_id), Div(Div(Span(cls="spinner"), "Loading", cls="more"), hx_get=src, hx_trigger="load"))
+
+
+def same_person_panel(network: str, prof, account_id: str):
+    """Who this account is on the other networks, so mentions in cross-posts reach them everywhere."""
+    here = f"/profile/{network}/{quote(prof.handle)}?" + urlencode({"acct": account_id})
+    person = people.find(db, network, prof.handle)
+    mine = people.normalise(network, prof.handle)
+
+    def link_form(other_network: str = "", other_handle: str = "", label: str = "Link"):
+        fields = [Hidden(name="network", value=network), Hidden(name="handle", value=prof.handle),
+                  Hidden(name="name", value=prof.display_name), Hidden(name="back", value=here)]
+        if other_handle:
+            return Form(*fields, Hidden(name="other_network", value=other_network),
+                        Hidden(name="other_handle", value=other_handle),
+                        Button(label, " ", badge(other_network), " @", other_handle, cls="small"),
+                        method="post", action="/people/link", cls="inline")
+        return Form(*fields,
+                    Select(*[Option(NETWORK_LABELS[n], value=n) for n in people.NETWORKS if n != network],
+                           name="other_network", aria_label="Network"),
+                    Input(name="other_handle", placeholder="their handle there", required=True,
+                          autocapitalize="none", autocorrect="off", cls="grow"),
+                    Button("Link", cls="small"), method="post", action="/people/link", cls="row link-form")
+
+    others = [(n, h) for n, h in person.all_handles() if (n, h) != (network, mine)] if person else []
+    linked = set(others)
+    found = [(n, h) for n, h in people.handles_in_bio(prof) if (n, h) not in linked]
+    rows = [Div(*[A(badge(n), " @", h, href=profile_url(n, h), cls="chip handle-chip") for n, h in others],
+                A("Edit", href=f"/people#person-{person.id}", cls="small"), cls="row wrap")] if others else []
+    if found:
+        rows.append(Div(Small("Their profile mentions:", cls="muted"), *[link_form(n, h) for n, h in found], cls="row wrap"))
+    return Section(H3("Also on" if others else "Same person on other networks"),
+                   *rows,
+                   P("Link their accounts and a mention of them in a cross-post tags them on every network.",
+                     cls="muted") if not others else None,
+                   Details(Summary("Link another account"), link_form()) if others else link_form(),
+                   cls="panel people-panel")
 
 
 @rt("/profile-feed")
@@ -315,10 +352,13 @@ async def get(reply: str = ""):
     accts = [a for a in accounts()]
     if not accts:
         return shell("Post", error_box("Connect an account first."), active="/compose")
-    reply_post, reply_acct = None, None
+    reply_post, reply_acct, prefill = None, None, ""
     if reply:
         reply_post = cache.get_post(db, reply)
         reply_acct = split_key(reply)[0]
+        mine = next((a for a in accts if a.account_id == reply_acct), None)
+        if reply_post and mine and mine.network == "mastodon":
+            prefill = people.reply_mentions(reply_post, {a.rec.handle.lower() for a in accts})
     boxes = []
     for a in accts:
         limit = await a.max_chars()
@@ -333,11 +373,13 @@ async def get(reply: str = ""):
     overrides = Details(Summary("Customise the text per network"),
                         *[Label(Span(a.rec.handle, " ", badge(a.network)),
                                 Textarea(name=f"text_{a.account_id}", rows=3, placeholder="Leave empty to use the main text",
-                                         data_override=a.account_id, data_network=a.network)) for a in accts],
+                                         data_override=a.account_id, data_network=a.network, cls="mentionable"))
+                          for a in accts],
                         cls="overrides")
     form = Form(
         Hidden(name="reply", value=reply),
-        Textarea(name="text", id="compose-text", rows=6, placeholder="What's happening?", autofocus=True, required=True),
+        Textarea(prefill, name="text", id="compose-text", rows=6, placeholder="What's happening? Type @ to mention someone",
+                 autofocus=True, required=True, cls="mentionable", autocapitalize="sentences"),
         Div(*boxes, cls="acct-list"),
         overrides,
         Div(Label("Images (up to 4)", Input(type="file", name="images", accept="image/*", multiple=True, id="images")),
@@ -348,8 +390,57 @@ async def get(reply: str = ""):
         Div(Button("Post", cls="primary", id="post-btn"), Span(cls="htmx-indicator spinner"), cls="row end"),
         hx_post="/compose", hx_encoding="multipart/form-data", hx_target="#compose-result", hx_swap="innerHTML",
         hx_indicator=".htmx-indicator", cls="compose stack", id="compose-form")
+    preview = Div(id="mention-preview", hx_post="/compose/preview", hx_trigger="input delay:700ms from:#compose-form, "
+                  "change from:#compose-form, load", hx_include="#compose-form textarea, #compose-form .acct-box, "
+                  "#compose-form [name=reply]", aria_live="polite")
     return shell("Post", H2("Reply" if reply else "New post", cls="page-title"),
-                 post_card(reply_post) if reply_post else None, form, Div(id="compose-result"), active="/compose")
+                 post_card(reply_post) if reply_post else None, form, preview, Div(id="compose-result"),
+                 active="/compose")
+
+
+HOW = {"native": "tags them", "linked": "tags their linked account", "bridged": "tags them through Bridgy Fed",
+       "plain": "plain text, no account known there", "name": "their name, no account linked there"}
+
+
+@rt("/compose/preview")
+async def post(req):
+    """How each mention will be written on each network the post goes to."""
+    form = await req.form()
+    text = form.get("text") or ""
+    chosen = form.getlist("accounts")
+    reply_key = form.get("reply") or ""
+    if reply_key:
+        chosen = [split_key(reply_key)[0]]
+    by_id = {a.account_id: a for a in accounts()}
+    targets = [by_id[c] for c in chosen if c in by_id]
+    outcomes: dict[str, list] = {}
+    for a in targets:
+        t = (form.get(f"text_{a.account_id}") or "").strip() or text
+        new, mentions = await people.rewrite(db, t, a)
+        for m in mentions:
+            outcomes.setdefault(m.original, []).append((a, m))
+        limit = await a.max_chars()
+        if new != t and length_for(a.network, new) > limit:
+            outcomes.setdefault("", []).append((a, length_for(a.network, new), limit))
+    if not any(k for k in outcomes):
+        return ""
+    rows = []
+    for original, items in outcomes.items():
+        if not original:
+            continue
+        unknown = any(m.how in ("plain", "name") for _, m in items)
+        net = people.shape(original)
+        fix = A("Link their accounts", href=profile_url({"bare": "x"}.get(net, net), original.lstrip("@")),
+                cls="small") if unknown and net != "bare" else (A("Add them in People", href="/people", cls="small")
+                                                                   if unknown else None)
+        person = people.find_any(db, original)
+        rows.append(Li(Strong(original), " ", Small(person.name, cls="muted") if person and person.name else None,
+                       Ul(*[Li(badge(a.network), " ", Code(m.replacement), " ", Small(HOW[m.how], cls="muted"),
+                               cls="how-" + m.how) for a, m in items]), fix))
+    long = [Li(badge(a.network), f" {a.rec.handle}: {used} of {limit} characters after mentions are rewritten")
+            for a, used, limit in outcomes.get("", [])]
+    return Section(H3("Mentions on each network"), Ul(*rows, cls="mention-rows"),
+                   Ul(*long, cls="warn") if long else None, cls="panel mention-preview")
 
 
 @rt("/compose")
@@ -383,6 +474,7 @@ async def post(req):
     texts = {}
     for a in targets:
         t = (form.get(f"text_{a.account_id}") or "").strip() or text
+        t, _ = await people.rewrite(db, t, a)
         texts[a.account_id] = t
         limit = await a.max_chars()
         if not thread and length_for(a.network, t) > limit:
@@ -409,8 +501,132 @@ async def post(req):
     feeds._results.clear()
     ok = all(not isinstance(r, Exception) for r in results)
     return Div(Strong("Posted." if ok else "Some posts failed."), Ul(*rows),
-               Script("document.getElementById('compose-form').reset();document.getElementById('alt-fields').innerHTML='';") if ok else None,
+               Script("document.getElementById('compose-form').reset();document.getElementById('alt-fields').innerHTML='';"
+                      "document.getElementById('mention-preview').innerHTML='';") if ok else None,
                cls="result " + ("ok" if ok else "warn"))
+
+
+# ---------- people ----------
+
+def _handles_field(p, network: str):
+    value = ", ".join((p.handles.get(network) or []) if p else [])
+    hint = {"bluesky": "alice.bsky.social", "mastodon": "alice@mastodon.social", "x": "alice"}[network]
+    return Label(NETWORK_LABELS[network], Input(name=network, value=value, placeholder=hint, autocapitalize="none",
+                                                autocorrect="off"))
+
+
+def person_form(p=None):
+    return Form(Hidden(name="pid", value=str(p.id) if p else ""),
+                Label("Name", Input(name="name", value=p.name if p else "", placeholder="Alice Example")),
+                *[_handles_field(p, n) for n in people.NETWORKS],
+                Small("Several accounts on one network? Separate them with commas; the first is used in posts.",
+                      cls="muted"),
+                Div(Button("Save" if p else "Add person", cls="small primary"), cls="row"),
+                method="post", action="/people/save", cls="stack person-form")
+
+
+@rt("/people")
+async def get(ok: str = ""):
+    cards = []
+    for p in people.all_people(db):
+        chips = [A(badge(n), " @", h, href=profile_url(n, h), cls="chip handle-chip") for n, h in p.all_handles()]
+        cards.append(Section(Div(Strong(p.name or "(no name)"), *chips, cls="row wrap"),
+                             Details(Summary("Edit"), person_form(p),
+                                     Form(Hidden(name="pid", value=str(p.id)), Button("Delete", cls="small danger"),
+                                          method="post", action="/people/delete")),
+                             cls="panel person", id=f"person-{p.id}"))
+    return shell("People",
+                 H2("People", cls="page-title"),
+                 P("Link the accounts one person has on each network. When you mention them in a cross-post, each "
+                   "network gets their handle there. Mentions of people you haven't linked are posted as plain text "
+                   "on other networks, or through Bridgy Fed when they're bridged, so they never tag a stranger.",
+                   cls="muted"),
+                 Div(ok, cls="result ok") if ok else None,
+                 Section(H3("Add someone"), person_form(), cls="panel"),
+                 *(cards or [P("No one linked yet. You can also link accounts from anyone's profile page.",
+                                         cls="muted")]),
+                 active="/settings")
+
+
+@rt("/people/save")
+async def post(req):
+    form = await req.form()
+    handles = {n: [h for h in (form.get(n) or "").replace("\n", ",").split(",") if h.strip()] for n in people.NETWORKS}
+    pid = form.get("pid") or ""
+    if not any(handles.values()):
+        if pid:
+            people.delete(db, int(pid))
+        return RedirectResponse("/people", status_code=303)
+    pid = people.save(db, form.get("name") or "", handles, int(pid) if pid else None)
+    return RedirectResponse(f"/people?ok=Saved#person-{pid}", status_code=303)
+
+
+@rt("/people/delete")
+async def post(pid: int):
+    people.delete(db, pid)
+    return RedirectResponse("/people?ok=Deleted", status_code=303)
+
+
+@rt("/people/link")
+async def post(network: str, handle: str, other_network: str, other_handle: str, name: str = "", back: str = ""):
+    if network in people.NETWORKS and other_network in people.NETWORKS and other_handle.strip():
+        people.link(db, network, handle, other_network, other_handle, name)
+    return RedirectResponse(back if back.startswith("/") and not back.startswith("//") else "/people", status_code=303)
+
+
+@rt("/people/suggest")
+async def get(q: str = "", networks: str = ""):
+    """People to offer when you type @ in the composer: linked people, accounts you've seen, then a live search."""
+    q = q.strip().lstrip("@")
+    if not q:
+        return JSONResponse([])
+    wanted = [n for n in networks.split(",") if n in people.NETWORKS] or list(people.NETWORKS)
+    found, seen_accts = people.suggest_local(db, q)
+    out, taken, pids = [], set(), set()
+
+    def add_person(p):
+        if p.id in pids:
+            return
+        pids.add(p.id)
+        hs = p.all_handles()
+        best = next(((n, h) for w in wanted for n, h in hs if n == w), hs[0])
+        face = next((s for n, h in hs if (s := people.seen(db, n, h)) and s.avatar), None)
+        taken.update(hs)
+        out.append({"name": p.name or best[1], "avatar": face.avatar if face else "", "insert": "@" + best[1],
+                    "handles": [{"network": n, "handle": h} for n, h in hs], "linked": True})
+
+    def add_account(a):
+        h = people.normalise(a.network, a.handle)
+        if (a.network, h) in taken:
+            return
+        p = people.find(db, a.network, h)
+        if p:
+            return add_person(p)
+        taken.add((a.network, h))
+        out.append({"name": a.display_name or h, "avatar": a.avatar, "insert": "@" + h,
+                    "handles": [{"network": a.network, "handle": h}], "linked": False})
+
+    for p in found:
+        add_person(p)
+    for a in seen_accts:
+        if a.network in wanted:
+            add_account(a)
+    if len(out) < 8 and len(q) >= 2:
+        searchers, nets = [], set()
+        for a in accounts():
+            if a.network in wanted and a.network not in nets:
+                nets.add(a.network)
+                searchers.append(a.search_people(q, 6))
+        try:
+            results = await asyncio.wait_for(asyncio.gather(*searchers, return_exceptions=True), 3)
+        except asyncio.TimeoutError:
+            results = []
+        for res in results:
+            if isinstance(res, list):
+                people.remember(db, res)
+                for a in res:
+                    add_account(a)
+    return JSONResponse(out[:8])
 
 
 # ---------- notifications ----------
@@ -599,6 +815,9 @@ async def get(error: str = "", ok: str = ""):
                               action="/settings/notify"),
                          cls="panel"),
                  x_section,
+                 Section(H3("People"), P("Link someone's Bluesky, Mastodon and X accounts so mentions in your "
+                                         "cross-posts tag them on every network.", cls="muted"),
+                         A("Manage people", href="/people", cls="button"), cls="panel"),
                  Section(H3("Muted accounts"), P("One handle per line. Hidden from custom feeds.", cls="muted"),
                          Form(Textarea("\n".join(db.get("muted", [])), name="muted", rows=4),
                               Button("Save", cls="small"), method="post", action="/settings/muted", cls="stack"),

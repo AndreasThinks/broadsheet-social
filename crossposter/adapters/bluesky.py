@@ -273,6 +273,10 @@ class BlueskyAdapter(NetworkAdapter):
     async def profile(self, handle: str) -> Account:
         return to_account(await self._get("app.bsky.actor.getProfile", actor=handle.lstrip("@")))
 
+    async def search_people(self, q: str, limit: int = 6) -> list[Account]:
+        data = await self._get("app.bsky.actor.searchActorsTypeahead", q=q, limit=limit)
+        return [to_account(a) for a in data.get("actors", [])]
+
     async def author_feed(self, handle: str, cursor: str | None = None) -> Page:
         data = await self._get("app.bsky.feed.getAuthorFeed", actor=handle.lstrip("@"), limit=30, cursor=cursor)
         return Page([to_post(i["post"], self.account_id, i.get("reason"), i.get("reply")) for i in data.get("feed", [])],

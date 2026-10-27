@@ -92,10 +92,20 @@ def _full_acct(acct: str, host: str) -> str:
     return acct if "@" in acct else f"{acct}@{host}"
 
 
+def _bio(a: dict) -> str:
+    """The note plus profile fields, which is where people usually list their other accounts."""
+    lines = [_html_to_text(a.get("note", ""))]
+    for f in a.get("fields") or []:
+        name, value = _html_to_text(f.get("name", "")), _html_to_text(f.get("value", "")).replace("\n", "")
+        if name or value:
+            lines.append(f"{name}: {value}")
+    return "\n".join(line for line in lines if line)
+
+
 def to_account(a: dict, host: str) -> Account:
     return Account(network="mastodon", id=str(a["id"]), handle=_full_acct(a.get("acct", a.get("username", "")), host),
                    display_name=a.get("display_name") or "", avatar=a.get("avatar") or "",
-                   url=a.get("url") or "", bio=_html_to_text(a.get("note", "")),
+                   url=a.get("url") or "", bio=_bio(a),
                    followers=a.get("followers_count"), following=a.get("following_count"),
                    posts=a.get("statuses_count"))
 
@@ -252,6 +262,12 @@ class MastodonAdapter(NetworkAdapter):
 
     async def profile(self, handle: str) -> Account:
         return to_account(await self._lookup(handle), self.host)
+
+    async def search_people(self, q: str, limit: int = 6) -> list[Account]:
+        # Only ask the server to fetch remote accounts once a full user@server has been typed.
+        full = "@" in q.lstrip("@") and "." in q.rsplit("@", 1)[-1]
+        r = await self._get("/api/v1/accounts/search", q=q, limit=limit, resolve="true" if full else "false")
+        return [to_account(a, self.host) for a in r.json()]
 
     async def author_feed(self, handle: str, cursor: str | None = None) -> Page:
         a = await self._lookup(handle)
