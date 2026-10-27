@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import asyncio
 import hmac
+import inspect
 import json
 import logging
 import shutil
@@ -178,10 +179,12 @@ async def get(feed: str = "", acct: str = "", custom: str = ""):
     if not feed and not custom:
         custom = "combined"
     tabs = []
-    for lf in feeds.all_feeds():
+    current = None
+    for lf in visible_feeds(include=custom):
         name = lf.feed.name if lf.feed else lf.slug
+        current = lf if custom == lf.slug else current
         tabs.append(A(name, href=f"/?custom={lf.slug}", cls="tab" + (" active" if custom == lf.slug else ""),
-                      title="Custom feed"))
+                      title=(lf.feed.description if lf.feed else "") or "Custom feed"))
     multi = {}
     for a in accts:
         multi[a.network] = multi.get(a.network, 0) + 1
@@ -195,8 +198,26 @@ async def get(feed: str = "", acct: str = "", custom: str = ""):
     tabs.append(A("All feeds…", href="/feeds", cls="tab more-tab"))
     src = ("/timeline?" + urlencode({"custom": custom}) if custom
            else "/timeline?" + urlencode({"feed": feed, "acct": acct}))
-    return shell("Home", Div(*tabs, cls="tabs"),
+    return shell("Home", Div(*tabs, cls="tabs"), feed_header(current) if current else None,
                  Div(Div(Span(cls="spinner"), "Loading", cls="more"), hx_get=src, hx_trigger="load", cls="timeline"))
+
+
+def visible_feeds(include: str = "") -> list:
+    """Custom feeds in your chosen order, minus the ones hidden from Home (unless it's the one being viewed)."""
+    ordered, hidden = feeds.arrange(feeds.all_feeds(), db.get("feed_prefs", {}))
+    return [lf for lf in ordered if lf.slug not in hidden or lf.slug == include]
+
+
+def feed_header(lf):
+    """A line above a custom feed: what it shows, which networks it draws on, and shortcuts to refresh or edit."""
+    f = lf.feed
+    nets = list(dict.fromkeys(s.split(":", 1)[0] for s in f.sources)) if f else []
+    return Div(Div(P(f.description or f.name, cls="feed-desc") if f else P(Code(lf.error), cls="error"),
+                   Div(*[badge(n) for n in nets], cls="feed-nets"), cls="feed-about"),
+               Div(Button("Refresh", cls="small", hx_get="/timeline?" + urlencode({"custom": lf.slug, "fresh": 1}),
+                          hx_target="next .timeline"),
+                   A("Edit", href=f"/feeds/{lf.slug}/edit", cls="button small") if lf.path else None,
+                   cls="row"), cls="feed-bar")
 
 
 PAGE = 25
@@ -446,19 +467,48 @@ async def _refresh_notifications():
 
 # ---------- custom feeds ----------
 
+def feed_card(lf, hidden: bool = False, first: bool = False, last: bool = False):
+    f = lf.feed
+    slug = lf.slug
+    nets = list(dict.fromkeys(s.split(":", 1)[0] for s in f.sources)) if f else []
+    move = lambda arrow, label, step, off: Form(Button(arrow, cls="small", disabled=off, title=label, aria_label=label),
+                                                method="post", action=f"/feeds/{slug}/move?step={step}")
+    return Section(
+        Div(Div(H3(f.name if f else slug), *[badge(n) for n in nets], cls="feed-title"),
+            Small(f"{slug}.py" if lf.path else "built in", cls="muted"), cls="feed-head"),
+        P(f.description) if f and f.description else None,
+        P(Strong("Error: "), Code(lf.error), cls="error") if lf.error else None,
+        P("Sources: ", *[Code(s) for s in f.sources], cls="sources") if f else None,
+        Div(A("Open", href=f"/?custom={slug}", cls="button primary small") if f else None,
+            A("Edit", href=f"/feeds/{slug}/edit", cls="button small") if lf.path else None,
+            A("Copy", href=f"/feeds/new/edit?{urlencode({'start': slug})}", cls="button small",
+              title="Start a new feed from this one"),
+            Form(Button("Show on Home" if hidden else "Hide from Home", cls="small"),
+                 method="post", action=f"/feeds/{slug}/visibility"),
+            move("↑", "Move up", -1, first), move("↓", "Move down", 1, last),
+            Form(Button("Remove", cls="small danger"), method="post", action=f"/feeds/{slug}/remove",
+                 onsubmit=f"return confirm({json.dumps(f'Remove {f.name if f else slug}? The file is kept as _removed_{slug}.py.')})")
+            if lf.path else None, cls="row feed-actions"),
+        Details(Summary("View source"), Pre(Code(lf.source, cls="language-python"))),
+        cls="panel feed-card" + (" hidden-feed" if hidden else ""), id=slug)
+
+
+def starter_card(lf):
+    f = lf.feed
+    nets = list(dict.fromkeys(s.split(":", 1)[0] for s in f.sources)) if f else []
+    return Section(
+        Div(Div(H3(f.name if f else lf.slug), *[badge(n) for n in nets], cls="feed-title"), cls="feed-head"),
+        P(f.description) if f and f.description else None,
+        Div(Form(Button("Add feed", cls="primary small"), method="post", action=f"/feeds/{lf.slug}/install"),
+            Details(Summary("View source"), Pre(Code(lf.source, cls="language-python"))), cls="row"),
+        cls="panel feed-card starter")
+
+
 @rt("/feeds")
 async def get():
-    cards = []
-    for lf in feeds.all_feeds():
-        f = lf.feed
-        cards.append(Section(
-            Div(H3(f.name if f else lf.slug), Small(f"{lf.slug}.py" if lf.path else "built in", cls="muted"), cls="feed-head"),
-            P(f.description) if f and f.description else None,
-            P(Strong("Error: "), Code(lf.error), cls="error") if lf.error else None,
-            P("Sources: ", *[Code(s) for s in f.sources], cls="sources") if f else None,
-            Div(A("Open", href=f"/?custom={lf.slug}", cls="button") if f else None,
-                A("Edit", href=f"/feeds/{lf.slug}/edit", cls="button") if lf.path else None, cls="row"),
-            Details(Summary("View source"), Pre(Code(lf.source, cls="language-python"))), cls="panel feed-card"))
+    ordered, hidden = feeds.arrange(feeds.all_feeds(), db.get("feed_prefs", {}))
+    cards = [feed_card(lf, lf.slug in hidden, i == 0, i == len(ordered) - 1) for i, lf in enumerate(ordered)]
+    starters = [starter_card(lf) for lf in feeds.starter_feeds() if lf.feed]
     native = []
     for a in accounts():
         fs = await native_feeds(a)
@@ -467,11 +517,48 @@ async def get():
             for f in fs])))
     return shell("Feeds", H2("Your custom feeds", cls="page-title"),
                  P("Custom feeds are Python files. Each one picks posts from the sources it lists and ranks them with a ",
-                   Code("score()"), " function. Edit one here or in your editor; changes apply on save.", cls="muted"),
+                   Code("score()"), " function. Edit one here or in your editor; changes apply on save. "
+                   "The order here is the order of the tabs on Home.", cls="muted"),
                  A("New feed", href="/feeds/new/edit", cls="button primary"), *cards,
+                 *([H2("Add more feeds", cls="page-title"),
+                    P("Ready-made feeds that ship with the app. Adding one copies it into your feeds folder so you can edit it.",
+                      cls="muted"), *starters] if starters else []),
                  H2("Native feeds", cls="page-title"),
                  P("Use these source names in a custom feed's sources list.", cls="muted"),
                  Ul(*native, cls="native-feeds"), active="/feeds")
+
+
+def _save_prefs(prefs: dict) -> None:
+    db.set("feed_prefs", prefs)
+
+
+@rt("/feeds/{slug}/visibility")
+async def post(slug: str):
+    prefs = db.get("feed_prefs", {})
+    hidden = set(prefs.get("hidden") or [])
+    hidden ^= {slug}
+    _save_prefs({**prefs, "hidden": sorted(hidden)})
+    return RedirectResponse(f"/feeds#{slug}", status_code=303)
+
+
+@rt("/feeds/{slug}/move")
+async def post(slug: str, step: int = 0):
+    slugs = [lf.slug for lf in feeds.arrange(feeds.all_feeds(), db.get("feed_prefs", {}))[0]]
+    _save_prefs(feeds.move(db.get("feed_prefs", {}), slugs, slug, 1 if step > 0 else -1))
+    return RedirectResponse(f"/feeds#{slug}", status_code=303)
+
+
+@rt("/feeds/{slug}/remove")
+async def post(slug: str):
+    feeds.remove_feed(_safe_slug(slug))
+    return RedirectResponse("/feeds", status_code=303)
+
+
+@rt("/feeds/{slug}/install")
+async def post(slug: str):
+    slug = _safe_slug(slug)
+    feeds.install_starter(slug)
+    return RedirectResponse(f"/?custom={slug}" if feeds.get_feed(slug) else "/feeds", status_code=303)
 
 
 TEMPLATE = '''from crossposter.feeds import Feed, Post, Ctx
@@ -501,13 +588,44 @@ def _safe_slug(slug: str) -> str:
     return s[:60] or "my_feed"
 
 
+def _starting_point(start: str) -> str:
+    """Source for a new feed copied from an existing or starter feed, renamed so it doesn't clash."""
+    lf = feeds.get_feed(start) or next((f for f in feeds.starter_feeds() if f.slug == start), None) if start else None
+    if not lf:
+        return TEMPLATE
+    if lf.feed:
+        return lf.source.replace(f'name="{lf.feed.name}"', f'name="{lf.feed.name} (copy)"', 1)
+    return lf.source
+
+
+def feed_reference():
+    """The helpers and sources a feed can use, built from the docstrings so it stays current."""
+    helpers = []
+    for name in sorted(vars(feeds.Ctx)):
+        fn = getattr(feeds.Ctx, name)
+        if name.startswith("_") or not callable(fn) or not fn.__doc__:
+            continue
+        args = ", ".join(p for p in inspect.signature(fn).parameters if p != "self")
+        helpers.append((f"ctx.{name}({args})", fn.__doc__.strip().splitlines()[0]))
+    attrs = [("ctx.posts", "every candidate post"), ("ctx.now", "the time ranking started (unix seconds)")]
+    post_fields = ("network, author.handle, created_at, plain_text, likes, reposts, replies, quotes, engagement, "
+                   "card, media, quote, reposted_by, is_reply, lang, also_on")
+    sources = [line.strip() for line in (feeds.__doc__ or "").split("Sources a feed can draw from:")[-1].splitlines() if line.strip()]
+    return Details(Summary("Reference: sources and helpers"),
+                   H3("Sources"), Pre(Code("\n".join(sources))),
+                   H3("Post fields"), P(Code(post_fields)),
+                   H3("ctx helpers"), Ul(*[Li(Code(n), " ", d) for n, d in helpers],
+                                         *[Li(Code(n), " ", d) for n, d in attrs]),
+                   cls="panel reference")
+
+
 @rt("/feeds/{slug}/edit")
-async def get(slug: str):
+async def get(slug: str, start: str = ""):
     is_new = slug == "new"
     lf = None if is_new else feeds.get_feed(slug)
-    code = TEMPLATE if is_new else (lf.source if lf else "")
+    code = _starting_point(start) if is_new else (lf.source if lf else "")
     return shell("Edit feed", H2("New feed" if is_new else f"Edit {slug}.py", cls="page-title"),
-                 Form(Label("File name", Input(name="slug", value="" if is_new else slug, placeholder="my_feed",
+                 Form(Label("File name", Input(name="slug", value=(f"{_safe_slug(start)}_copy" if start else "") if is_new else slug, placeholder="my_feed",
                                                required=True, pattern="[A-Za-z0-9_]+", readonly=not is_new)),
                       Textarea(code, name="code", rows=24, cls="code", spellcheck="false"),
                       Div(Button("Save", cls="primary", formaction="/feeds/save", formmethod="post"),
@@ -515,7 +633,7 @@ async def get(slug: str):
                                  hx_include="closest form", hx_indicator=".htmx-indicator"),
                           Span(cls="htmx-indicator spinner"), cls="row"),
                       method="post", action="/feeds/save", cls="stack"),
-                 Div(id="preview", cls="preview"), wide=True, active="/feeds")
+                 feed_reference(), Div(id="preview", cls="preview"), wide=True, active="/feeds")
 
 
 @rt("/feeds/save")

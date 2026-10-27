@@ -63,6 +63,12 @@ On Linux, or to run from source: `pip install -r requirements-desktop.txt` then 
 
 A custom feed is a Python file in `feeds/` (on Railway, `/data/feeds`; the starter feeds are copied
 there on first boot). Edit them in the app under **Feeds**, or in your editor; changes apply on save.
+Starter feeds added in later versions show up under **Add more feeds** on the Feeds page, one tap to
+install. The Feeds page also sets the order of the tabs on Home, hides feeds from Home, copies a
+feed as the starting point for a new one, and removes feeds (the file is kept as `_removed_<name>.py`).
+
+Starter feeds: **Popular in my network**, **Links worth reading**, **Quiet posters**, and
+**Across networks** (links and topics turning up on Bluesky and Mastodon at the same time).
 
 ```python
 from crossposter.feeds import Feed, Post, Ctx
@@ -92,7 +98,10 @@ def score(post: Post, ctx: Ctx) -> dict:         # a number, or named terms that
   `quote`, `likes`, `reposts`, `replies`, `quotes`, `is_reply`, `reposted_by`, `network`, `lang`.
 - **Ctx** helpers: `age_hours`, `normalised_engagement` (0 to 1, compared within the post's own
   network, because Mastodon only reports counts your server has seen), `follows_who_engaged`
-  (people you follow who reposted it), `is_mine`, `is_muted`, `log1p`, and `ctx.posts`.
+  (people you follow who reposted it), `is_mine`, `is_muted`, `log1p`, and `ctx.posts`. For
+  cross-network feeds: `links` and `tags` (normalised), `networks_discussing` (every network where
+  the post or its link shows up), `people_sharing_link`, `tag_networks`, and `seen_in` (which
+  sources the post came from). The editor has a reference panel listing them all.
 - Feeds rank posts from a local cache that a background job keeps fresh (every 5 minutes, last 48
   hours), so they are fast and don't hammer the APIs. Ranking stops after `FEED_TIMEOUT_SECONDS`.
 

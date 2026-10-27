@@ -69,3 +69,59 @@ def test_ctx_normalised_engagement_is_per_network():
 def test_starter_feeds_load():
     for lf in feeds.all_feeds():
         assert not lf.error, (lf.slug, lf.error)
+
+
+def _linked(network, pid, url, handle, ago=1.0):
+    from crossposter.models import LinkCard
+    p = mk(network, pid, f"read this {pid}", handle=handle, ago=ago)
+    p.card = LinkCard(url=url)
+    return p
+
+
+def test_ctx_cross_network_helpers():
+    a = _linked("bluesky", "1", "https://www.example.com/story/?utm_source=bsky", "alice")
+    b = _linked("mastodon", "2", "http://example.com/story", "bob@m.social")
+    c = _linked("bluesky", "3", "https://other.example/x", "carol")
+    ctx = feeds.Ctx([a, b, c], set(), set())
+    assert ctx.links(a) == ["example.com/story"]
+    assert ctx.networks_discussing(a) == {"bluesky", "mastodon"}
+    assert ctx.networks_discussing(c) == {"bluesky"}
+    assert ctx.people_sharing_link(a) == 2
+
+
+def test_across_networks_feed_ranks_shared_links_first():
+    lf = feeds.get_feed("across_networks")
+    assert lf and not lf.error
+    shared = [_linked("bluesky", "1", "https://example.com/a", "alice"),
+              _linked("mastodon", "2", "https://example.com/a", "bob")]
+    solo = mk("bluesky", "3", "a popular post on one network only", handle="dan", likes=500, ago=0.1)
+    discover_only = mk("bluesky", "4", "something from discover", handle="eve", likes=900)
+    for p in shared + [solo]:
+        p.extra["sources"] = ["bluesky:following"]
+    discover_only.extra["sources"] = ["bluesky:discover"]
+    posts = shared + [solo, discover_only]
+    ranked = feeds.rank(lf, posts, feeds.Ctx(posts, set(), set()))
+    ids = [r.post.id for r in ranked]
+    assert set(ids[:2]) == {"1", "2"} and "4" not in ids
+
+
+def test_starter_gallery_install_remove_and_arrange(tmp_path):
+    starters = tmp_path / "starters"
+    mine = tmp_path / "mine"
+    starters.mkdir()
+    for name in ("one", "two"):
+        (starters / f"{name}.py").write_text(f'from crossposter.feeds import Feed\nfeed = Feed(name="{name}", sources=[])\n'
+                                             'def score(post, ctx):\n    return 0\n')
+    assert [f.slug for f in feeds.starter_feeds(mine, starters)] == ["one", "two"]
+    assert feeds.install_starter("one", mine, starters)
+    assert [f.slug for f in feeds.starter_feeds(mine, starters)] == ["two"]
+    assert feeds.remove_feed("one", mine) and (mine / "_removed_one.py").exists()
+    # A removed starter isn't offered again, and isn't loaded.
+    assert [f.slug for f in feeds.starter_feeds(mine, starters)] == ["two"]
+    assert [f.slug for f in feeds.all_feeds(mine)] == ["combined"]
+
+    loaded = feeds.all_feeds()
+    slugs = [lf.slug for lf in loaded]
+    prefs = feeds.move({}, slugs, slugs[-1], -1)
+    ordered, hidden = feeds.arrange(loaded, {**prefs, "hidden": ["combined"]})
+    assert [lf.slug for lf in ordered][-2] == slugs[-1] and hidden == {"combined"}
