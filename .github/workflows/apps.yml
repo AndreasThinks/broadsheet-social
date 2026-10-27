@@ -105,6 +105,9 @@ jobs:
           arch: x86_64
           target: google_apis
           disable-animations: true
+          # The emulator sometimes fails to come up on hosted runners; give it longer and cold-boot.
+          emulator-boot-timeout: 900
+          emulator-options: -no-window -gpu swiftshader_indirect -no-snapshot -noaudio -no-boot-anim -camera-back none
           script: android/ci-smoke.sh Cross-poster-android.apk
       - uses: actions/upload-artifact@v4
         if: always()
