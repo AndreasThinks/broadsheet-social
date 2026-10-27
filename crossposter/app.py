@@ -66,12 +66,13 @@ def auth_check(req, session):
 
 
 hdrs = (
-    Meta(name="theme-color", content="#4f46e5"),
+    Meta(name="theme-color", content="#ffffff", media="(prefers-color-scheme: light)"),
+    Meta(name="theme-color", content="#121212", media="(prefers-color-scheme: dark)"),
     Meta(name="color-scheme", content="light dark"),
     Meta(name="apple-mobile-web-app-capable", content="yes"),
     Meta(name="mobile-web-app-capable", content="yes"),
     Meta(name="apple-mobile-web-app-status-bar-style", content="default"),
-    Meta(name="apple-mobile-web-app-title", content="Cross-poster"),
+    Meta(name="apple-mobile-web-app-title", content="Broadsheet"),
     Link(rel="manifest", href="/manifest.webmanifest"),
     Link(rel="apple-touch-icon", href="/static/icons/apple-touch-icon.png"),
     Link(rel="icon", type="image/png", href="/static/icons/icon-192.png"),
@@ -80,7 +81,7 @@ hdrs = (
 )
 
 app, rt = fast_app(
-    pico=False, hdrs=hdrs, secret_key=app_secret(), lifespan=lifespan, title="Cross-poster",
+    pico=False, hdrs=hdrs, secret_key=app_secret(), lifespan=lifespan, title="Broadsheet",
     sess_https_only=settings.base_url.startswith("https://"), session_cookie="crossposter",
     before=Beforeware(auth_check, skip=[r"/login", r"/login/desktop", r"/static/.*", r"/oauth/bluesky/.*", r"/sw\.js",
                                          r"/manifest\.webmanifest", r"/favicon\.ico", r"/healthz"]),
@@ -102,8 +103,22 @@ def unread() -> int:
     return row["n"] if row else 0
 
 
-def shell(title: str, *content, active: str = "/", wide: bool = False):
-    return page(title, *content, active=active, unread=unread(), wide=wide)
+def shell(title: str, *content, active: str = "/", wide: bool = False, aside=None):
+    return page(title, *content, active=active, unread=unread(), wide=wide, aside=aside)
+
+
+def home_aside(accts) -> list:
+    """The column beside Home on wide screens: what's new since you last looked, and where you post."""
+    n = unread()
+    news = (P(f"{n} new {'notification' if n == 1 else 'notifications'} since you last looked."),
+            A("See activity", href="/notifications")) if n else (P("Nothing new since you last looked."),)
+    x_default = xapi.post_by_default(db)
+    rows = [Li(Span(NETWORK_LABELS.get(a.network, a.network)),
+               Span(a.rec.handle + ("" if a.network != "x" or x_default else " · off by default")))
+            for a in accts]
+    return [Section(H2("While you were away"), *news),
+            Section(H3("Your accounts", cls="aside-label"), Ul(*rows, cls="aside-accounts"),
+                    A("Manage", href="/settings#accounts"))]
 
 
 async def native_feeds(a) -> list:
@@ -131,7 +146,7 @@ def split_key(key: str) -> tuple[str, str]:
 
 @rt("/login")
 def get(error: str = ""):
-    return (page("Sign in", Section(H1("Cross-poster"), P("Enter the app password to continue."),
+    return (page("Sign in", Section(H1("Broadsheet"), P("Enter the app password to continue."),
                                     Form(Input(type="password", name="password", placeholder="App password",
                                                autofocus=True, required=True, autocomplete="current-password"),
                                          Button("Sign in", cls="primary"), method="post", action="/login", cls="stack"),
@@ -198,8 +213,9 @@ async def get(feed: str = "", acct: str = "", custom: str = ""):
     tabs.append(A("All feeds…", href="/feeds", cls="tab more-tab"))
     src = ("/timeline?" + urlencode({"custom": custom}) if custom
            else "/timeline?" + urlencode({"feed": feed, "acct": acct}))
-    return shell("Home", Div(*tabs, cls="tabs"), feed_header(current) if current else None,
-                 Div(Div(Span(cls="spinner"), "Loading", cls="more"), hx_get=src, hx_trigger="load", cls="timeline"))
+    return shell("Read", Div(*tabs, cls="tabs"), feed_header(current) if current else None,
+                 Div(Div(Span(cls="spinner"), "Loading", cls="more"), hx_get=src, hx_trigger="load", cls="timeline"),
+                 aside=home_aside(accts))
 
 
 def visible_feeds(include: str = "") -> list:
@@ -397,25 +413,26 @@ async def get(reply: str = ""):
                                          data_override=a.account_id, data_network=a.network, cls="mentionable"))
                           for a in accts],
                         cls="overrides")
+    preview = Div(id="mention-preview", hx_post="/compose/preview", hx_trigger="input delay:700ms from:#compose-form, "
+                  "change from:#compose-form, load", hx_include="#compose-form textarea, #compose-form .acct-box, "
+                  "#compose-form [name=reply]", aria_live="polite")
     form = Form(
         Hidden(name="reply", value=reply),
-        Textarea(prefill, name="text", id="compose-text", rows=6, placeholder="What's happening? Type @ to mention someone",
+        Textarea(prefill, name="text", id="compose-text", rows=6, placeholder="Write something. Type @ to mention someone.",
                  autofocus=True, required=True, cls="mentionable", autocapitalize="sentences"),
+        preview,
         Div(*boxes, cls="acct-list"),
-        overrides,
         Div(Label("Images (up to 4)", Input(type="file", name="images", accept="image/*", multiple=True, id="images")),
             Div(id="alt-fields"), cls="images"),
         Div(Label("Content warning", Input(name="cw", placeholder="Optional"), cls="grow"),
             Label(Input(type="checkbox", name="thread", value="on", checked=True),
                   "Split long text into a thread"), cls="row"),
-        Div(Button("Post", cls="primary", id="post-btn"), Span(cls="htmx-indicator spinner"), cls="row end"),
+        overrides,
+        Div(Span(cls="htmx-indicator spinner"), Button("Publish", cls="primary", id="post-btn"), cls="row end"),
         hx_post="/compose", hx_encoding="multipart/form-data", hx_target="#compose-result", hx_swap="innerHTML",
-        hx_indicator=".htmx-indicator", cls="compose stack", id="compose-form")
-    preview = Div(id="mention-preview", hx_post="/compose/preview", hx_trigger="input delay:700ms from:#compose-form, "
-                  "change from:#compose-form, load", hx_include="#compose-form textarea, #compose-form .acct-box, "
-                  "#compose-form [name=reply]", aria_live="polite")
-    return shell("Post", H2("Reply" if reply else "New post", cls="page-title"),
-                 post_card(reply_post) if reply_post else None, form, preview, Div(id="compose-result"),
+        hx_indicator=".htmx-indicator", hx_disinherit="*", cls="compose stack", id="compose-form")
+    return shell("Write", H2("Reply" if reply else "Write", cls="page-title"),
+                 post_card(reply_post) if reply_post else None, form, Div(id="compose-result"),
                  active="/compose")
 
 
@@ -455,12 +472,14 @@ async def post(req):
                 cls="small") if unknown and net != "bare" else (A("Add them in People", href="/people", cls="small")
                                                                    if unknown else None)
         person = people.find_any(db, original)
-        rows.append(Li(Strong(original), " ", Small(person.name, cls="muted") if person and person.name else None,
-                       Ul(*[Li(badge(a.network), " ", Code(m.replacement), " ", Small(HOW[m.how], cls="muted"),
-                               cls="how-" + m.how) for a, m in items]), fix))
+        rows.append(Li(Strong(person.name if person and person.name else original),
+                       " ", Small(original, cls="muted") if person and person.name else None,
+                       Ul(*[Li(NETWORK_LABELS.get(a.network, a.network), ": ", Code(m.replacement), " ",
+                               Small(HOW[m.how]), cls="how-" + m.how) for a, m in items]), fix,
+                       cls="unknown" if unknown else None))
     long = [Li(badge(a.network), f" {a.rec.handle}: {used} of {limit} characters after mentions are rewritten")
             for a, used, limit in outcomes.get("", [])]
-    return Section(H3("Mentions on each network"), Ul(*rows, cls="mention-rows"),
+    return Section(H3("How your mentions will read"), Ul(*rows, cls="mention-rows"),
                    Ul(*long, cls="warn") if long else None, cls="panel mention-preview")
 
 
@@ -958,6 +977,8 @@ def _x_settings():
           cls="muted"),
         P(Strong(f"${usage['cost']:.2f}"), f" of ${usage['cap']:.2f} used in {usage['month']} · "
           f"{usage['post_reads']} posts read, {usage['posts'] + usage['link_posts']} posted"),
+        Div(Span(style=f"width: {min(100, 100 * usage['cost'] / usage['cap']) if usage['cap'] else 0:.0f}%"),
+            cls="spend", role="img", aria_label=f"{usage['cost']:.2f} of {usage['cap']:.2f} dollars used"),
         creds,
         A("Connect X account", href="/auth/x/start", cls="button primary") if cid and not connected else None,
         Form(Label(Input(type="checkbox", name="on", value="1", checked=xapi.post_by_default(db), onchange="this.form.submit()"),
@@ -1107,7 +1128,7 @@ async def post(req):
 
 @rt("/push/test")
 async def post():
-    n = await push.send(db, "Cross-poster", "Notifications are working.", "/notifications", tag="test")
+    n = await push.send(db, "Broadsheet", "Notifications are working.", "/notifications", tag="test")
     return JSONResponse({"sent": n})
 
 
@@ -1116,8 +1137,8 @@ async def post():
 @rt("/manifest.webmanifest")
 def get():
     return Response(json.dumps({
-        "name": "Cross-poster", "short_name": "Cross-poster", "id": "/", "start_url": "/", "scope": "/",
-        "display": "standalone", "background_color": "#f7f7fb", "theme_color": "#4f46e5",
+        "name": "Broadsheet", "short_name": "Broadsheet", "id": "/", "start_url": "/", "scope": "/",
+        "display": "standalone", "background_color": "#ffffff", "theme_color": "#ffffff",
         "description": "Read and post across Bluesky, Mastodon and more.",
         "icons": [{"src": "/static/icons/icon-192.png", "sizes": "192x192", "type": "image/png"},
                   {"src": "/static/icons/icon-512.png", "sizes": "512x512", "type": "image/png"},

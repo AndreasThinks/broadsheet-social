@@ -1,4 +1,4 @@
-# Cross-poster
+# Broadsheet
 
 Read and post across Bluesky, Mastodon and X from one small, self-hosted app.
 It is written in Python with [FastHTML](https://fastht.ml), runs on your laptop, and installs on

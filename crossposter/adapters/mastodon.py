@@ -40,7 +40,7 @@ async def _app_for(db, host: str) -> dict:
     if row:
         return {"client_id": row["client_id"], "client_secret": row["client_secret"]}
     r = await http().post(f"https://{host}/api/v1/apps", data={
-        "client_name": "Cross-poster", "redirect_uris": callback_url(),
+        "client_name": "Broadsheet", "redirect_uris": callback_url(),
         "scopes": SCOPES, "website": settings.base_url})
     if r.status_code >= 400:
         raise NetworkError(f"{host} refused to register the app ({r.status_code}). Is it a Mastodon-compatible server?")

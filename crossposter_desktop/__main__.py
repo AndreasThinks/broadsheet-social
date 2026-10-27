@@ -1,4 +1,4 @@
-"""Cross-poster as a desktop app: the same FastHTML app, served on 127.0.0.1 and shown in a native window.
+"""Broadsheet as a desktop app: the same FastHTML app, served on 127.0.0.1 and shown in a native window.
 
     python -m crossposter_desktop              # open the app
     python -m crossposter_desktop --headless   # just the server, for a browser or testing
@@ -24,7 +24,8 @@ from pathlib import Path
 from . import updater
 
 log = logging.getLogger("crossposter.desktop")
-APP_NAME = "Cross-poster"
+APP_NAME = "Broadsheet"
+DATA_DIR_NAME = "Cross-poster"  # the app's old name; kept so existing installs find their data
 DEFAULT_PORT = 47615
 FROZEN = getattr(sys, "frozen", False)
 
@@ -34,9 +35,9 @@ def data_dir() -> Path:
         return Path(override)
     home = Path.home()
     if sys.platform == "win32":
-        return Path(os.environ.get("APPDATA", home / "AppData" / "Roaming")) / APP_NAME
+        return Path(os.environ.get("APPDATA", home / "AppData" / "Roaming")) / DATA_DIR_NAME
     if sys.platform == "darwin":
-        return home / "Library" / "Application Support" / APP_NAME
+        return home / "Library" / "Application Support" / DATA_DIR_NAME
     return Path(os.environ.get("XDG_DATA_HOME", home / ".local" / "share")) / "cross-poster"
 
 
@@ -140,12 +141,12 @@ def smoke(port: int, token: str) -> None:
     with httpx.Client(base_url=f"http://127.0.0.1:{port}", follow_redirects=True, timeout=30) as c:
         assert c.get("/healthz").json() == {"ok": True}
         home = c.get("/login/desktop", params={"token": token})
-        assert home.status_code == 200 and "Cross-poster" in home.text, home.status_code
+        assert home.status_code == 200 and "Broadsheet" in home.text, home.status_code
     print("smoke test passed")
 
 
 def main(argv=None) -> None:
-    ap = argparse.ArgumentParser(description="Cross-poster desktop app")
+    ap = argparse.ArgumentParser(description="Broadsheet desktop app")
     ap.add_argument("--headless", action="store_true", help="run the server without a window")
     ap.add_argument("--smoke", action="store_true", help="start, check the app answers, and exit")
     ap.add_argument("--port", type=int, help="port on 127.0.0.1 (default: the one used last time)")
@@ -162,7 +163,7 @@ def main(argv=None) -> None:
     bundled = bundled_dir()
     code_dir, server, thread = start(data, bundled)
     info = updater.read_info(code_dir)
-    log.info("Cross-poster %s (build %s) on http://127.0.0.1:%s, data in %s",
+    log.info("Broadsheet %s (build %s) on http://127.0.0.1:%s, data in %s",
              info.get("commit"), info.get("build"), port, data)
 
     if args.smoke:
@@ -193,7 +194,7 @@ def main(argv=None) -> None:
         result = updater.check(bundled, data / "updates", code_dir)
         if result.status == "shell" and result.page:
             ask = getattr(window, "create_confirmation_dialog", None)
-            if ask and ask("Update available", "A new version of Cross-poster is available to download. "
+            if ask and ask("Update available", "A new version of Broadsheet is available to download. "
                                                 "Open the download page?"):
                 webbrowser.open(result.page)
 

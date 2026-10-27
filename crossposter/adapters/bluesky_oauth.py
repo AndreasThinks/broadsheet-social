@@ -60,7 +60,7 @@ def jwks(db) -> dict:
 def client_metadata() -> dict:
     return {
         "client_id": client_id(),
-        "client_name": "Cross-poster",
+        "client_name": "Broadsheet",
         "client_uri": settings.base_url,
         "application_type": "web",
         "grant_types": ["authorization_code", "refresh_token"],

@@ -123,7 +123,7 @@ class MainActivity : ComponentActivity() {
                 }
             } catch (e: Exception) {
                 Log.e("crossposter", "start failed", e)
-                runOnUiThread { status.text = "Cross-poster couldn't start:\n${e.message}" }
+                runOnUiThread { status.text = "Broadsheet couldn't start:\n${e.message}" }
             }
         }
     }
