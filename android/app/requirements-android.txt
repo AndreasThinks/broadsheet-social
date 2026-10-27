@@ -1,0 +1,44 @@
+# Installed with --no-deps (see app/build.gradle.kts), so this is the complete list.
+# Native packages are pinned to the versions Chaquopy publishes Android builds of; everything else is pure Python.
+# python-fasthtml asks for uvicorn[standard], whose extras (uvloop, watchfiles...) don't build for Android and aren't needed.
+aiohappyeyeballs==2.7.1
+aiohttp==3.10.10
+aiosignal==1.4.0
+anyio==4.15.1
+attrs==26.1.0
+beautifulsoup4==4.15.0
+certifi==2026.10.23
+cffi==1.17.1
+charset-normalizer==3.5.2
+click==8.5.0
+cryptography==42.0.8
+fastcore==2.2.35
+frozenlist==1.4.1
+h11==0.16.0
+# http_ece 1.2.1 is vendored in src/main/python (it only ships as an sdist, which Chaquopy can't install).
+httpcore==1.0.9
+httpcore2==2.16.0
+httpx==0.28.1
+httpx2==2.16.0
+idna==3.20
+itsdangerous==2.2.0
+joserfc==1.7.7
+multidict==6.1.0
+oauthlib==4.0.0
+pillow==11.0.0
+propcache==0.5.4
+py-vapid==1.9.6
+pycparser==3.12
+python-dateutil==3.0.0
+python-fasthtml==0.14.14
+python-multipart==0.0.32
+pywebpush==2.5.0
+requests==2.34.2
+six==1.17.0
+sniffio==1.3.1
+soupsieve==3.0.4
+starlette==1.10.0
+typing_extensions==4.16.0
+urllib3==2.8.0
+uvicorn==0.54.0
+yarl==1.16.0

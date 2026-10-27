@@ -1,0 +1,154 @@
+name: apps
+# Builds the desktop (Windows, macOS) and Android apps. On every push to main it also publishes them to
+# GitHub Pages: the download page, the installers, and the app-code bundle installed desktop apps update
+# themselves from. Railway isn't involved.
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pages: write
+  id-token: write
+
+concurrency:
+  group: apps-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  PYTHON_VERSION: "3.12"  # bundle and desktop shells must agree, it's part of the deps hash
+
+jobs:
+  bundle:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+      - run: python -m crossposter_desktop.release bundle --out dist
+      - uses: actions/upload-artifact@v4
+        with:
+          name: bundle
+          path: dist/
+
+  desktop:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            platform: windows
+          - os: macos-latest
+            platform: macos
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+      - run: pip install -r requirements-desktop.txt
+      - run: python -m crossposter_desktop.release info --out build/app-info/build.json
+      - run: pyinstaller crossposter_desktop/crossposter.spec --noconfirm
+
+      - name: Smoke test (Windows)
+        if: matrix.platform == 'windows'
+        shell: pwsh
+        env:
+          CROSSPOSTER_DESKTOP_DATA: ${{ runner.temp }}\cp-smoke
+        run: |
+          $p = Start-Process -FilePath "dist\Cross-poster\Cross-poster.exe" -ArgumentList "--smoke" -Wait -PassThru
+          Get-Content "$env:CROSSPOSTER_DESKTOP_DATA\desktop.log" -ErrorAction SilentlyContinue
+          if ($p.ExitCode -ne 0) { exit $p.ExitCode }
+          Compress-Archive -Path "dist\Cross-poster" -DestinationPath "Cross-poster-windows.zip"
+      - name: Smoke test (macOS)
+        if: matrix.platform == 'macos'
+        env:
+          CROSSPOSTER_DESKTOP_DATA: ${{ runner.temp }}/cp-smoke
+        run: |
+          "dist/Cross-poster.app/Contents/MacOS/Cross-poster" --smoke
+          ditto -c -k --keepParent "dist/Cross-poster.app" Cross-poster-macos.zip
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: app-${{ matrix.platform }}
+          path: Cross-poster-${{ matrix.platform }}.zip
+
+  android:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"  # Chaquopy needs the same Python version on the build machine
+      - uses: gradle/actions/setup-gradle@v4
+      - name: Build APK
+        working-directory: android
+        run: ./gradlew assembleRelease --console=plain
+      - run: cp android/app/build/outputs/apk/release/app-release.apk Cross-poster-android.apk
+      - name: Enable KVM for the emulator
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+      - name: Smoke test on an emulator
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 34
+          arch: x86_64
+          target: google_apis
+          disable-animations: true
+          script: android/ci-smoke.sh Cross-poster-android.apk
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: android-screenshot
+          path: android-screenshot.png
+          if-no-files-found: ignore
+      - uses: actions/upload-artifact@v4
+        with:
+          name: app-android
+          path: Cross-poster-android.apk
+
+  publish:
+    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+    needs: [bundle, desktop, android]
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          path: out
+          merge-multiple: true
+      - name: Assemble the site
+        run: |
+          mkdir -p site/desktop site/downloads
+          cp site-src/* site/
+          cp out/manifest.json out/crossposter-app.zip site/desktop/
+          cp out/Cross-poster-windows.zip out/Cross-poster-macos.zip out/Cross-poster-android.apk site/downloads/
+          sed -i "s/{{COMMIT}}/${GITHUB_SHA::7}/; s/{{DATE}}/$(date -u +'%-d %B %Y')/" site/index.html
+      - name: Attach to the desktop-latest GitHub release
+        run: |
+          gh release view desktop-latest >/dev/null 2>&1 || \
+            gh release create desktop-latest --title "Cross-poster apps" --notes "Downloads: https://andreasthinks.github.io/cross-poster-/" --target "$GITHUB_SHA"
+          gh release upload desktop-latest out/Cross-poster-windows.zip out/Cross-poster-macos.zip out/Cross-poster-android.apk out/crossposter-app.zip --clobber
+          gh release upload desktop-latest out/manifest.json --clobber
+      - uses: actions/configure-pages@v5
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: site
+      - id: deploy
+        uses: actions/deploy-pages@v4

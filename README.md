@@ -45,17 +45,19 @@ Push notifications need the server to be always on, so the phone setup runs on a
 screen, open it from the home screen, then Settings → Turn on notifications. iPhone needs iOS 16.4
 or later for web app notifications.
 
-## Desktop app (Windows and macOS)
+## Desktop and Android apps
 
-Download the zip for your computer from the [desktop-latest release](https://github.com/AndreasThinks/cross-poster-/releases/tag/desktop-latest), unzip it and open Cross-poster. It runs the same app in its own window, entirely on your computer: your accounts, feeds and database live in your user data folder (`%APPDATA%\Cross-poster` on Windows, `~/Library/Application Support/Cross-poster` on macOS), not on any server.
+Download from **https://andreasthinks.github.io/cross-poster-/**. The apps run the same app entirely on your device: your accounts, feeds and database live in your user data folder (`%APPDATA%\Cross-poster` on Windows, `~/Library/Application Support/Cross-poster` on macOS, the app's private storage on Android). They don't use the Railway server or any other server of ours.
 
-The builds aren't signed yet, so the first time you open it macOS needs right-click → Open, and Windows needs "More info → Run anyway".
+The builds aren't signed with a paid certificate yet, so the first time you open it macOS needs right-click → Open, Windows needs "More info → Run anyway", and Android needs you to allow installs from your browser.
 
-**Updates follow `main`.** Every push to `main` (the same thing that redeploys the web version) publishes a small bundle of the app code. The desktop app checks for it after opening, downloads it quietly, and uses it the next time you open the app. If an update fails to start, the app goes back to the previous version and never tries that one again. When an update needs new libraries, the app asks you to download the new version instead. How it works is in `crossposter_desktop/updater.py`.
+**Desktop updates follow `main`.** Every push to `main` publishes a small bundle of the app code to GitHub Pages (`.github/workflows/apps.yml`). The desktop app checks for it after opening, downloads it quietly, and uses it the next time you open the app. If an update fails to start, the app goes back to the previous version and never tries that one again. When an update needs new libraries, the app asks you to download the new version instead. How it works is in `crossposter_desktop/updater.py`.
 
-Things that differ from the web version: Bluesky uses its local sign-in mode, so you'll be asked to sign in again more often; and notifications show in the app while it's open, but there are no system notifications yet.
+**Android** (`android/`) is a small Kotlin shell around the same Python app, using [Chaquopy](https://chaquo.com/chaquopy/). A background job checks for notifications about every 15 minutes while the app is closed. Install new versions over the old one, or point [Obtainium](https://obtainium.imranr.dev/) at the download page. APKs are signed with a shared debug key committed in `android/` so updates install cleanly; set the `ANDROID_KEYSTORE_*` variables in CI to sign with a private key instead (users would need to reinstall once).
 
-On Linux, or to run from source: `pip install -r requirements-desktop.txt` then `python -m crossposter_desktop` (pywebview needs GTK or Qt on Linux; `--headless` serves it to your browser instead).
+Things that differ from the web version: Bluesky uses its local sign-in mode, so you'll be asked to sign in again more often; Web Push is replaced by in-app notifications on desktop and Android notifications on phones.
+
+On Linux, or to run from source: `pip install -r requirements-desktop.txt` then `python -m crossposter_desktop` (pywebview needs GTK or Qt on Linux; `--headless` serves it to your browser instead). To build Android: `cd android && ./gradlew assembleRelease` with the Android SDK and Python 3.13 installed.
 
 ## Custom feeds
 

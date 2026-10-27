@@ -1,0 +1,73 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Cross-poster downloads</title>
+<meta name="description" content="Read and post across Bluesky and Mastodon. Runs entirely on your own device.">
+<style>
+  :root { --bg: #f7f7fb; --card: #fff; --text: #1d1d27; --muted: #5d5d6e; --accent: #4f46e5; --line: #e4e4ee; }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg: #121218; --card: #1c1c25; --text: #ececf3; --muted: #a2a2b5; --accent: #8b85ff; --line: #2c2c38; }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text); font: 16px/1.55 system-ui, -apple-system, "Segoe UI", sans-serif; }
+  main { max-width: 760px; margin: 0 auto; padding: 48px 16px 64px; }
+  h1 { font-size: 2rem; margin: 0 0 .25rem; display: flex; align-items: center; gap: .6rem; }
+  h1 span { width: 14px; height: 14px; border-radius: 50%; background: var(--accent); display: inline-block; }
+  .lede { color: var(--muted); margin: 0 0 2rem; }
+  .grid { display: grid; gap: 14px; grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); }
+  .card { background: var(--card); border: 1px solid var(--line); border-radius: 14px; padding: 18px; display: flex; flex-direction: column; gap: .5rem; }
+  .card.mine { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }
+  .card h2 { font-size: 1.1rem; margin: 0; }
+  .card p { margin: 0; color: var(--muted); font-size: .92rem; flex: 1; }
+  .btn { display: inline-block; text-align: center; background: var(--accent); color: #fff; text-decoration: none; padding: .6rem .9rem; border-radius: 10px; font-weight: 600; }
+  section { margin-top: 2.5rem; }
+  section h3 { font-size: 1rem; margin: 0 0 .5rem; }
+  section p, section li { color: var(--muted); font-size: .95rem; }
+  code { background: var(--line); padding: 1px 5px; border-radius: 5px; font-size: .9em; }
+  footer { margin-top: 3rem; color: var(--muted); font-size: .85rem; }
+</style>
+</head>
+<body>
+<main>
+  <h1><span></span>Cross-poster</h1>
+  <p class="lede">Read and post across Bluesky and Mastodon from one app. It runs entirely on your device: your accounts and posts never pass through anyone else's server.</p>
+
+  <div class="grid">
+    <div class="card" data-os="android">
+      <h2>Android</h2>
+      <p>Android 8 or later. Allow installs from your browser when asked.</p>
+      <a class="btn" href="downloads/Cross-poster-android.apk">Download APK</a>
+    </div>
+    <div class="card" data-os="windows">
+      <h2>Windows</h2>
+      <p>Unzip, then open <code>Cross-poster.exe</code>. Choose "More info → Run anyway" the first time.</p>
+      <a class="btn" href="downloads/Cross-poster-windows.zip">Download for Windows</a>
+    </div>
+    <div class="card" data-os="mac">
+      <h2>macOS</h2>
+      <p>Unzip and move to Applications. Right-click → Open the first time.</p>
+      <a class="btn" href="downloads/Cross-poster-macos.zip">Download for Mac</a>
+    </div>
+  </div>
+
+  <section>
+    <h3>Staying up to date</h3>
+    <p>The desktop apps update themselves: they fetch new versions in the background and switch over the next time you open them. On Android, install the new APK over the old one, or add this page to <a href="https://obtainium.imranr.dev/">Obtainium</a> to get updates automatically.</p>
+  </section>
+  <section>
+    <h3>Notifications</h3>
+    <p>On Android, the app checks for replies, mentions, quotes and follows about every 15 minutes, even when it's closed. Android may check less often to save battery.</p>
+  </section>
+
+  <footer>Built from commit {{COMMIT}} on {{DATE}}.</footer>
+</main>
+<script>
+  const ua = navigator.userAgent;
+  const os = /Android/.test(ua) ? "android" : /Windows/.test(ua) ? "windows" : /Mac/.test(ua) ? "mac" : "";
+  const mine = os && document.querySelector(`[data-os="${os}"]`);
+  if (mine) { mine.classList.add("mine"); mine.parentNode.prepend(mine); }
+</script>
+</body>
+</html>
