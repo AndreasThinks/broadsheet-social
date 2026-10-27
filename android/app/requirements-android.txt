@@ -42,3 +42,8 @@ typing_extensions==4.16.0
 urllib3==2.8.0
 uvicorn==0.54.0
 yarl==1.16.0
+# Native libraries the Chaquopy builds above link against (normally pulled in as their dependencies).
+chaquopy-libffi==3.3
+chaquopy-freetype==2.9.1
+chaquopy-libjpeg==1.5.3
+chaquopy-libpng==1.6.34
