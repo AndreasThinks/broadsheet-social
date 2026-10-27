@@ -80,3 +80,22 @@ def test_password_protects_app(client):
         assert client.get("/", follow_redirects=False).status_code == 200
     finally:
         settings.app_password = ""
+
+
+def test_desktop_token_login(client):
+    settings.app_password = "launch-token"
+    try:
+        client.cookies.clear()
+        # Off unless the desktop launcher started the app.
+        r = client.get("/login/desktop?token=launch-token", follow_redirects=False)
+        assert r.headers["location"] == "/login"
+        settings.desktop = True
+        assert client.get("/login/desktop?token=wrong", follow_redirects=False).headers["location"] == "/login"
+        assert client.get("/", follow_redirects=False).status_code == 303
+        r = client.get("/login/desktop?token=launch-token", follow_redirects=False)
+        assert r.headers["location"] == "/"
+        assert client.get("/", follow_redirects=False).status_code == 200
+    finally:
+        settings.app_password = ""
+        settings.desktop = False
+        client.cookies.clear()

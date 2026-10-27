@@ -45,6 +45,18 @@ Push notifications need the server to be always on, so the phone setup runs on a
 screen, open it from the home screen, then Settings → Turn on notifications. iPhone needs iOS 16.4
 or later for web app notifications.
 
+## Desktop app (Windows and macOS)
+
+Download the zip for your computer from the [desktop-latest release](https://github.com/AndreasThinks/cross-poster-/releases/tag/desktop-latest), unzip it and open Cross-poster. It runs the same app in its own window, entirely on your computer: your accounts, feeds and database live in your user data folder (`%APPDATA%\Cross-poster` on Windows, `~/Library/Application Support/Cross-poster` on macOS), not on any server.
+
+The builds aren't signed yet, so the first time you open it macOS needs right-click → Open, and Windows needs "More info → Run anyway".
+
+**Updates follow `main`.** Every push to `main` (the same thing that redeploys the web version) publishes a small bundle of the app code. The desktop app checks for it after opening, downloads it quietly, and uses it the next time you open the app. If an update fails to start, the app goes back to the previous version and never tries that one again. When an update needs new libraries, the app asks you to download the new version instead. How it works is in `crossposter_desktop/updater.py`.
+
+Things that differ from the web version: Bluesky uses its local sign-in mode, so you'll be asked to sign in again more often; and notifications show in the app while it's open, but there are no system notifications yet.
+
+On Linux, or to run from source: `pip install -r requirements-desktop.txt` then `python -m crossposter_desktop` (pywebview needs GTK or Qt on Linux; `--headless` serves it to your browser instead).
+
 ## Custom feeds
 
 A custom feed is a Python file in `feeds/` (on Railway, `/data/feeds`; the starter feeds are copied

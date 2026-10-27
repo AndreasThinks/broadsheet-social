@@ -81,7 +81,7 @@ hdrs = (
 app, rt = fast_app(
     pico=False, hdrs=hdrs, secret_key=app_secret(), lifespan=lifespan, title="Cross-poster",
     sess_https_only=settings.base_url.startswith("https://"), session_cookie="crossposter",
-    before=Beforeware(auth_check, skip=[r"/login", r"/static/.*", r"/oauth/bluesky/.*", r"/sw\.js",
+    before=Beforeware(auth_check, skip=[r"/login", r"/login/desktop", r"/static/.*", r"/oauth/bluesky/.*", r"/sw\.js",
                                          r"/manifest\.webmanifest", r"/favicon\.ico", r"/healthz"]),
 )
 # fast_app adds a catch-all that serves files from the working directory; it would shadow
@@ -144,6 +144,15 @@ async def post(password: str, session):
         return RedirectResponse("/", status_code=303)
     await asyncio.sleep(1)
     return RedirectResponse("/login?error=Wrong+password", status_code=303)
+
+
+@rt("/login/desktop")
+def get(session, token: str = ""):
+    """The desktop app opens its window here with the per-launch password, so you never type it."""
+    if settings.desktop and settings.app_password and hmac.compare_digest(token.encode(), settings.app_password.encode()):
+        session["auth"] = True
+        return RedirectResponse("/", status_code=303)
+    return RedirectResponse("/login", status_code=303)
 
 
 @rt("/logout")

@@ -29,6 +29,8 @@ class Settings:
     cache_hours: int = field(default_factory=lambda: int(os.environ.get("CACHE_HOURS", "48")))
     feed_timeout_seconds: float = field(default_factory=lambda: float(os.environ.get("FEED_TIMEOUT_SECONDS", "5")))
     demo: bool = field(default_factory=lambda: _bool("DEMO"))
+    # Set by the desktop launcher, which signs its own window in with APP_PASSWORD at /login/desktop.
+    desktop: bool = field(default_factory=lambda: _bool("DESKTOP"))
     # X is experimental and off unless these are set.
     x_enabled: bool = field(default_factory=lambda: _bool("X_ENABLED"))
     x_client_id: str = field(default_factory=lambda: os.environ.get("X_CLIENT_ID", ""))
