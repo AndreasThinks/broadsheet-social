@@ -31,8 +31,8 @@ class Settings:
     demo: bool = field(default_factory=lambda: _bool("DEMO"))
     # Set by the desktop launcher, which signs its own window in with APP_PASSWORD at /login/desktop.
     desktop: bool = field(default_factory=lambda: _bool("DESKTOP"))
-    # X is experimental and off unless these are set.
-    x_enabled: bool = field(default_factory=lambda: _bool("X_ENABLED"))
+    # X is on unless X_ENABLED=false. The app credentials can also be entered in Settings.
+    x_enabled: bool = field(default_factory=lambda: _bool("X_ENABLED", True))
     x_client_id: str = field(default_factory=lambda: os.environ.get("X_CLIENT_ID", ""))
     x_client_secret: str = field(default_factory=lambda: os.environ.get("X_CLIENT_SECRET", ""))
     x_monthly_cap_usd: float = field(default_factory=lambda: float(os.environ.get("X_MONTHLY_CAP_USD", "10")))

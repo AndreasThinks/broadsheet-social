@@ -11,7 +11,7 @@ database (feed_prefs), not in the files.
 Sources a feed can draw from:
     bluesky:following      bluesky:discover        bluesky:feed:<at:// uri>   bluesky:list:<at:// uri>
     mastodon:home          mastodon:local          mastodon:public            mastodon:trending
-    mastodon:list:<id>     mastodon:tag:<name>     x:home (experimental, costs money)
+    mastodon:list:<id>     mastodon:tag:<name>     x:home (costs money)
 """
 from __future__ import annotations
 

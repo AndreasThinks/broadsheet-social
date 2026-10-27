@@ -1,7 +1,11 @@
-"""X (Twitter). EXPERIMENTAL: X's API is pay-per-use, so every read costs money.
+"""X (Twitter). X's API is pay-per-use, so every call costs money.
 
-Posting is on by default once an account is connected. Reading is off until you switch it on in
-Settings, and every call is checked against a monthly spend cap (X_MONTHLY_CAP_USD).
+Posting is on once an account is connected. Reading is off until you switch it on in Settings, and
+every call is checked against a monthly spend cap (X_MONTHLY_CAP_USD).
+
+The X app's credentials come from X_CLIENT_ID / X_CLIENT_SECRET, or, where there are no environment
+variables (the desktop and Android apps), from Settings, where they are stored encrypted. A "Native
+App" (public client) needs only the client ID; a "Web App" also needs the secret.
 Prices are from https://docs.x.com/x-api/getting-started/pricing (October 2026).
 """
 from __future__ import annotations
@@ -13,7 +17,7 @@ from datetime import datetime, timezone
 from urllib.parse import urlencode
 
 from ..config import settings
-from ..crypto import pkce_pair
+from ..crypto import decrypt_json, encrypt_json, pkce_pair
 from ..models import Account, FeedInfo, Media, Notification, Page, Post
 from ..richtext import URL_RE, x_segments, split_for_thread
 from .base import AccountRecord, NetworkAdapter, NetworkError, PostResult, Upload, http, parse_time, save_account
@@ -64,27 +68,57 @@ def reading_enabled(db) -> bool:
     return bool(db.get("x_read_enabled", False))
 
 
-def _basic_auth():
-    return (settings.x_client_id, settings.x_client_secret) if settings.x_client_secret else None
+def post_by_default(db) -> bool:
+    return bool(db.get("x_post_by_default", True))
+
+
+def client_id(db) -> str:
+    return settings.x_client_id or db.get("x_client_id", "") or ""
+
+
+def client_secret(db) -> str:
+    if settings.x_client_secret:
+        return settings.x_client_secret
+    try:
+        return decrypt_json(db.get("x_client_secret")).get("secret", "")
+    except Exception:  # SECRET_KEY changed since it was saved
+        return ""
+
+
+def credentials_from_env() -> bool:
+    return bool(settings.x_client_id)
+
+
+def save_credentials(db, cid: str, secret: str) -> None:
+    db.set("x_client_id", cid.strip())
+    db.set("x_client_secret", encrypt_json({"secret": secret.strip()}) if secret.strip() else "")
+
+
+def _basic_auth(db):
+    secret = client_secret(db)
+    return (client_id(db), secret) if secret else None
 
 
 async def start_login(db) -> str:
-    if not (settings.x_enabled and settings.x_client_id):
-        raise NetworkError("X is turned off. Set X_ENABLED=true and X_CLIENT_ID to try it.")
+    if not settings.x_enabled:
+        raise NetworkError("X is switched off on this server (X_ENABLED=false).")
+    if not client_id(db):
+        raise NetworkError("Add your X app's client ID in Settings first.")
     verifier, challenge = pkce_pair()
     state = secrets.token_urlsafe(24)
     db.put_state(state, "x", {"verifier": verifier})
     return "https://x.com/i/oauth2/authorize?" + urlencode({
-        "response_type": "code", "client_id": settings.x_client_id, "redirect_uri": callback_url(),
+        "response_type": "code", "client_id": client_id(db), "redirect_uri": callback_url(),
         "scope": SCOPES, "state": state, "code_challenge": challenge, "code_challenge_method": "S256"})
 
 
-async def _token(data: dict) -> dict:
-    r = await http().post(f"{API}/2/oauth2/token", data={**data, "client_id": settings.x_client_id}, auth=_basic_auth())
+async def _token(db, data: dict) -> dict:
+    r = await http().post(f"{API}/2/oauth2/token", data={**data, "client_id": client_id(db)}, auth=_basic_auth(db))
     if r.status_code >= 400:
         raise NetworkError(f"X sign-in failed ({r.status_code}): {r.text[:200]}")
     t = r.json()
-    return {"access_token": t["access_token"], "refresh_token": t.get("refresh_token"),
+    # X rotates refresh tokens; keep the old one if a response ever leaves it out.
+    return {"access_token": t["access_token"], "refresh_token": t.get("refresh_token") or data.get("refresh_token"),
             "expires_at": time.time() + int(t.get("expires_in", 7200))}
 
 
@@ -92,7 +126,7 @@ async def finish_login(db, code: str, state: str) -> AccountRecord:
     st = db.pop_state(state, "x")
     if not st:
         raise NetworkError("The sign-in link expired. Please try again.")
-    tokens = await _token({"grant_type": "authorization_code", "code": code, "redirect_uri": callback_url(),
+    tokens = await _token(db, {"grant_type": "authorization_code", "code": code, "redirect_uri": callback_url(),
                            "code_verifier": st["verifier"]})
     check_budget(db, user_reads=1)
     r = await http().get(f"{API}/2/users/me", params={"user.fields": USER_FIELDS},
@@ -148,14 +182,14 @@ class XAdapter(NetworkAdapter):
     network = "x"
     label = "X"
     char_limit = 280
-    experimental = True
+    experimental = True  # shown as "costs money" in the composer
 
     async def _fresh(self) -> str:
         async with _lock:
             if self.rec.tokens.get("expires_at", 0) - 60 < time.time():
                 if not self.rec.tokens.get("refresh_token"):
                     raise NetworkError("X session expired; please sign in again.")
-                self.save_tokens(await _token({"grant_type": "refresh_token",
+                self.save_tokens(await _token(self.db, {"grant_type": "refresh_token",
                                                "refresh_token": self.rec.tokens["refresh_token"]}))
         return self.rec.tokens["access_token"]
 
