@@ -343,13 +343,13 @@ async def get(reply: str = ""):
     boxes = []
     for a in accts:
         limit = await a.max_chars()
-        checked = (a.account_id == reply_acct) if reply else (a.network != "x")
+        checked = (a.account_id == reply_acct) if reply else (a.network != "x" or xapi.post_by_default(db))
         disabled = bool(reply) and a.account_id != reply_acct
         boxes.append(Label(Input(type="checkbox", name="accounts", value=a.account_id, checked=checked, disabled=disabled,
                                  data_network=a.network, data_limit=str(limit), cls="acct-box"),
                            avatar(a.me(), "xs"), Span(a.rec.handle), badge(a.network),
                            Span("", cls="counter", data_for=a.account_id),
-                           Small("experimental, costs money", cls="muted") if a.experimental else None,
+                           Small("costs money", cls="muted") if a.experimental else None,
                            cls="acct-option"))
     overrides = Details(Summary("Customise the text per network"),
                         *[Label(Span(a.rec.handle, " ", badge(a.network)),
@@ -681,20 +681,8 @@ async def get(error: str = "", ok: str = ""):
                   for k, label in (("reply", "Replies"), ("mention", "Mentions"), ("quote", "Quotes"),
                                    ("follow", "New followers"), ("like", "Likes"), ("repost", "Reposts"))]
     usage = xapi.usage(db)
-    x_section = Section(
-        H3("X (experimental)"),
-        P("X charges per request. Posting costs $0.015 per post, or $0.20 if it contains a link. Reading costs "
-          "$0.005 per post. Reads are off unless you switch them on, and everything stops at your monthly cap.",
-          cls="muted"),
-        P(Strong(f"${usage['cost']:.2f}"), f" of ${usage['cap']:.2f} used in {usage['month']} · "
-          f"{usage['post_reads']} posts read, {usage['posts'] + usage['link_posts']} posted"),
-        Form(Label(Input(type="checkbox", name="on", value="1", checked=xapi.reading_enabled(db), onchange="this.form.submit()"),
-                   "Read my X timeline and mentions (costs money)"), method="post", action="/settings/x"),
-        A("Connect X account", href="/auth/x/start", cls="button") if settings.x_client_id else
-        P("Set X_ENABLED=true, X_CLIENT_ID and X_CLIENT_SECRET to connect an account.", cls="muted"),
-        cls="panel") if settings.x_enabled else Section(
-        H3("X (experimental)"), P("X is switched off. Set X_ENABLED=true and the X app credentials to try it.", cls="muted"),
-        cls="panel")
+    x_section = _x_settings() if settings.x_enabled else Section(
+        H3("X"), P("X is switched off on this server (X_ENABLED=false).", cls="muted"), cls="panel")
     return shell("Settings",
                  H2("Settings", cls="page-title"),
                  Div(error, cls="error") if error else None, Div(ok, cls="result ok") if ok else None,
@@ -725,6 +713,41 @@ async def get(error: str = "", ok: str = ""):
                  active="/settings")
 
 
+def _x_settings():
+    usage = xapi.usage(db)
+    cid = xapi.client_id(db)
+    connected = any(a.network == "x" for a in accounts())
+    if xapi.credentials_from_env():
+        creds = P("The X app's credentials are set on the server.", cls="muted")
+    else:
+        creds = Details(
+            Summary("X app credentials" + (" (saved)" if cid else "")),
+            P("Create an app at developer.x.com, switch on OAuth 2.0 with read and write permissions, and add this "
+              "callback URL exactly: ", Code(xapi.callback_url()), ". A Native App needs only the client ID; a Web "
+              "App also needs the client secret.", cls="muted"),
+            Form(Label("Client ID", Input(name="client_id", value=cid, required=True, autocapitalize="none",
+                                          autocorrect="off", autocomplete="off")),
+                 Label("Client secret", Input(name="client_secret", type="password", autocomplete="off",
+                                              placeholder="Saved, leave empty to keep" if xapi.client_secret(db)
+                                              else "Only for a Web App")),
+                 Button("Save", cls="small"), method="post", action="/settings/x/app", cls="stack"),
+            open=not cid)
+    return Section(
+        H3("X"),
+        P("X charges per request. Posting costs $0.015 per post, or $0.20 if it contains a link. Reading costs "
+          "$0.005 per post. Reads are off unless you switch them on, and everything stops at your monthly cap.",
+          cls="muted"),
+        P(Strong(f"${usage['cost']:.2f}"), f" of ${usage['cap']:.2f} used in {usage['month']} · "
+          f"{usage['post_reads']} posts read, {usage['posts'] + usage['link_posts']} posted"),
+        creds,
+        A("Connect X account", href="/auth/x/start", cls="button primary") if cid and not connected else None,
+        Form(Label(Input(type="checkbox", name="on", value="1", checked=xapi.post_by_default(db), onchange="this.form.submit()"),
+                   "Include X when cross-posting (you can untick it per post)"), method="post", action="/settings/x/post"),
+        Form(Label(Input(type="checkbox", name="on", value="1", checked=xapi.reading_enabled(db), onchange="this.form.submit()"),
+                   "Read my X timeline and mentions (costs money)"), method="post", action="/settings/x"),
+        cls="panel", id="x")
+
+
 @rt("/settings/notify")
 async def post(req):
     form = await req.form()
@@ -735,7 +758,23 @@ async def post(req):
 @rt("/settings/x")
 async def post(on: str = ""):
     db.set("x_read_enabled", bool(on))
-    return RedirectResponse("/settings", status_code=303)
+    return RedirectResponse("/settings#x", status_code=303)
+
+
+@rt("/settings/x/post")
+async def post(on: str = ""):
+    db.set("x_post_by_default", bool(on))
+    return RedirectResponse("/settings#x", status_code=303)
+
+
+@rt("/settings/x/app")
+async def post(client_id: str = "", client_secret: str = ""):
+    if xapi.credentials_from_env():
+        return RedirectResponse("/settings#x", status_code=303)
+    if not client_secret.strip():
+        client_secret = xapi.client_secret(db)
+    xapi.save_credentials(db, client_id, client_secret)
+    return RedirectResponse("/settings?ok=X+app+saved#x", status_code=303)
 
 
 @rt("/settings/muted")
