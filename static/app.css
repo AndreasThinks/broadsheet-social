@@ -194,3 +194,15 @@ label > input, label > textarea { margin-top: 4px; font-weight: 400; }
 .checks label { font-weight: 400; display: inline-flex; gap: 6px; align-items: center; }
 .preview { margin-top: 16px; }
 .row > label:not(.grow) { display: inline-flex; gap: 6px; align-items: center; font-weight: 400; }
+.feed-title { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.feed-title h3 { margin: 0; }
+.feed-actions { flex-wrap: wrap; gap: 6px; }
+.feed-actions form { margin: 0; }
+.hidden-feed { opacity: .6; }
+.feed-bar { display: flex; justify-content: space-between; align-items: center; gap: 10px; margin: 0 2px 10px; }
+.feed-about { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; min-width: 0; }
+.feed-desc { margin: 0; color: var(--muted); font-size: .9rem; }
+.feed-nets { display: flex; gap: 4px; }
+.reference { margin-top: 16px; } .reference h3 { font-size: .95rem; margin: 12px 0 4px; }
+.reference ul { padding-left: 18px; } .reference li { margin: 2px 0; font-size: .9rem; }
+.feed-bar .row { flex-wrap: nowrap; gap: 6px; }
