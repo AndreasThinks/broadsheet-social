@@ -93,6 +93,21 @@ jobs:
         working-directory: android
         run: ./gradlew assembleRelease --console=plain
       - run: cp android/app/build/outputs/apk/release/app-release.apk Cross-poster-android.apk
+      - uses: actions/upload-artifact@v4
+        with:
+          name: app-android
+          path: Cross-poster-android.apk
+
+  android-emulator:
+    # Installs the APK on an emulator and checks the app's server starts. Kept out of the publish path:
+    # hosted-runner emulators sometimes fail to boot, and that shouldn't hold back a release.
+    needs: android
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: app-android
       - name: Enable KVM for the emulator
         run: |
           echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
@@ -115,10 +130,6 @@ jobs:
           name: android-screenshot
           path: android-screenshot.png
           if-no-files-found: ignore
-      - uses: actions/upload-artifact@v4
-        with:
-          name: app-android
-          path: Cross-poster-android.apk
 
   publish:
     if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
