@@ -1,7 +1,7 @@
 """Keep the desktop app's code in step with main, without reinstalling.
 
 On each launch the app runs the newest code it has: either the code it shipped with, or a newer bundle
-it downloaded earlier into <data>/updates/. After the window is up it checks the release manifest, and
+it downloaded earlier into <data>/updates/ from the project's GitHub Pages site. After the window is up it checks the release manifest, and
 if there's newer code it downloads it for next time. If the new code needs libraries this shell doesn't
 have, it reports that a new download of the app is needed instead.
 
@@ -23,11 +23,11 @@ from pathlib import Path
 
 import httpx
 
-from .release import CHANNEL, REPO
+from .release import SITE
 
 log = logging.getLogger("crossposter.desktop")
 
-DEFAULT_URL = f"https://github.com/{REPO}/releases/download/{CHANNEL}/"
+DEFAULT_URL = SITE + "desktop/"  # GitHub Pages, published by .github/workflows/apps.yml
 MAX_BUNDLE_BYTES = 50 * 1024 * 1024
 
 

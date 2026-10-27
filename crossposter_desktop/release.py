@@ -26,6 +26,7 @@ DEPS_FILES = ("requirements.txt", "requirements-desktop.txt")
 BUNDLE_NAME = "crossposter-app.zip"
 REPO = "AndreasThinks/cross-poster-"
 CHANNEL = "desktop-latest"
+SITE = "https://andreasthinks.github.io/cross-poster-/"
 
 
 def deps_hash(root: Path = ROOT) -> str:
@@ -93,7 +94,7 @@ def make_bundle(root: Path, out: Path, info: dict | None = None) -> dict:
             z.write(path, path.relative_to(root).as_posix())
         z.writestr("build.json", json.dumps(info, indent=2))
     manifest = {**info, "bundle": BUNDLE_NAME, "sha256": hashlib.sha256(bundle.read_bytes()).hexdigest(),
-                "page": f"https://github.com/{REPO}/releases/tag/{CHANNEL}"}
+                "page": SITE}
     (out / "manifest.json").write_text(json.dumps(manifest, indent=2))
     return manifest
 
