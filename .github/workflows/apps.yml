@@ -60,22 +60,22 @@ jobs:
         env:
           CROSSPOSTER_DESKTOP_DATA: ${{ runner.temp }}\cp-smoke
         run: |
-          $p = Start-Process -FilePath "dist\Cross-poster\Cross-poster.exe" -ArgumentList "--smoke" -Wait -PassThru
+          $p = Start-Process -FilePath "dist\Broadsheet\Broadsheet.exe" -ArgumentList "--smoke" -Wait -PassThru
           Get-Content "$env:CROSSPOSTER_DESKTOP_DATA\desktop.log" -ErrorAction SilentlyContinue
           if ($p.ExitCode -ne 0) { exit $p.ExitCode }
-          Compress-Archive -Path "dist\Cross-poster" -DestinationPath "Cross-poster-windows.zip"
+          Compress-Archive -Path "dist\Broadsheet" -DestinationPath "Broadsheet-windows.zip"
       - name: Smoke test (macOS)
         if: matrix.platform == 'macos'
         env:
           CROSSPOSTER_DESKTOP_DATA: ${{ runner.temp }}/cp-smoke
         run: |
-          "dist/Cross-poster.app/Contents/MacOS/Cross-poster" --smoke
-          ditto -c -k --keepParent "dist/Cross-poster.app" Cross-poster-macos.zip
+          "dist/Broadsheet.app/Contents/MacOS/Broadsheet" --smoke
+          ditto -c -k --keepParent "dist/Broadsheet.app" Broadsheet-macos.zip
 
       - uses: actions/upload-artifact@v4
         with:
           name: app-${{ matrix.platform }}
-          path: Cross-poster-${{ matrix.platform }}.zip
+          path: Broadsheet-${{ matrix.platform }}.zip
 
   android:
     runs-on: ubuntu-latest
@@ -92,11 +92,11 @@ jobs:
       - name: Build APK
         working-directory: android
         run: ./gradlew assembleRelease --console=plain
-      - run: cp android/app/build/outputs/apk/release/app-release.apk Cross-poster-android.apk
+      - run: cp android/app/build/outputs/apk/release/app-release.apk Broadsheet-android.apk
       - uses: actions/upload-artifact@v4
         with:
           name: app-android
-          path: Cross-poster-android.apk
+          path: Broadsheet-android.apk
 
   android-emulator:
     # Installs the APK on an emulator and checks the app's server starts. Kept out of the publish path:
@@ -123,7 +123,7 @@ jobs:
           # The emulator sometimes fails to come up on hosted runners; give it longer and cold-boot.
           emulator-boot-timeout: 900
           emulator-options: -no-window -gpu swiftshader_indirect -no-snapshot -noaudio -no-boot-anim -camera-back none
-          script: android/ci-smoke.sh Cross-poster-android.apk
+          script: android/ci-smoke.sh Broadsheet-android.apk
       - uses: actions/upload-artifact@v4
         if: always()
         with:
@@ -152,13 +152,13 @@ jobs:
           mkdir -p site/desktop site/downloads
           cp site-src/* site/
           cp out/manifest.json out/crossposter-app.zip site/desktop/
-          cp out/Cross-poster-windows.zip out/Cross-poster-macos.zip out/Cross-poster-android.apk site/downloads/
+          cp out/Broadsheet-windows.zip out/Broadsheet-macos.zip out/Broadsheet-android.apk site/downloads/
           sed -i "s/{{COMMIT}}/${GITHUB_SHA::7}/; s/{{DATE}}/$(date -u +'%-d %B %Y')/" site/index.html
       - name: Attach to the desktop-latest GitHub release
         run: |
           gh release view desktop-latest >/dev/null 2>&1 || \
-            gh release create desktop-latest --title "Cross-poster apps" --notes "Downloads: https://andreasthinks.github.io/cross-poster-/" --target "$GITHUB_SHA"
-          gh release upload desktop-latest out/Cross-poster-windows.zip out/Cross-poster-macos.zip out/Cross-poster-android.apk out/crossposter-app.zip --clobber
+            gh release create desktop-latest --title "Broadsheet apps" --notes "Downloads: https://andreasthinks.github.io/cross-poster-/" --target "$GITHUB_SHA"
+          gh release upload desktop-latest out/Broadsheet-windows.zip out/Broadsheet-macos.zip out/Broadsheet-android.apk out/crossposter-app.zip --clobber
           gh release upload desktop-latest out/manifest.json --clobber
       - uses: actions/configure-pages@v5
       - uses: actions/upload-pages-artifact@v3

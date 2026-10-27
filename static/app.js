@@ -1,4 +1,4 @@
-// Cross-poster client: service worker, video, composer counters and @mentions, push sign-up.
+// Broadsheet client: service worker, video, composer counters and @mentions, push sign-up.
 (function () {
   "use strict";
 

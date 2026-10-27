@@ -140,7 +140,7 @@ def test_people_pages_link_and_mentions_follow_them(client):
     # The preview explains, and the post uses each network's handle.
     form = {"text": "thanks @ada.bsky.social and @grace@hachyderm.io", "accounts": ["demo-bluesky", "demo-mastodon"]}
     r = client.post("/compose/preview", data=form)
-    assert "Mentions on each network" in r.text and "@ada@hachyderm.io" in r.text and "@grace.bsky.social" in r.text
+    assert "How your mentions will read" in r.text and "@ada@hachyderm.io" in r.text and "@grace.bsky.social" in r.text
     assert client.post("/compose/preview", data={"text": "no mentions", "accounts": ["demo-bluesky"]}).text == ""
     r = client.post("/compose", data={**form, "thread": "on"})
     assert "Posted." in r.text

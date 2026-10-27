@@ -6,7 +6,7 @@ from html import escape
 from datetime import datetime
 from urllib.parse import quote, urlencode
 
-from fasthtml.common import (A, Article, Button, Details, Div, Footer, Header, Img, Li, Main, Nav, P, Script,
+from fasthtml.common import (A, Article, Aside, Button, Details, Div, Footer, Header, Img, Li, Main, Nav, P, Script,
                              Section, Small, Span, Strong, Summary, Title, Ul, Video, NotStr)
 
 from .models import Account, Notification, Post, Segment
@@ -164,14 +164,16 @@ def why(terms: dict[str, float], total: float):
 
 def post_card(post: Post, score: tuple[float, dict] | None = None, focus: bool = False):
     a = post.author
+    nets = [post.network] + [o["network"] for o in post.also_on]
+    on = " and ".join(NETWORK_LABELS.get(n, n) for n in dict.fromkeys(nets))
     head = Header(
-        A(avatar(a), href=profile_url(a.network, a.handle, post.account_id), cls="avatar-link"),
+        A(avatar(a, "sm"), href=profile_url(a.network, a.handle, post.account_id), cls="avatar-link"),
         Div(A(Strong(a.name), href=profile_url(a.network, a.handle, post.account_id), cls="name"),
-            Small(a.at_handle, cls="handle"), cls="who"),
-        Div(badge(post.network), *[badge(o["network"]) for o in post.also_on],
-            A(ago(post.created_at), href=thread_url(post), cls="time",
-              title=datetime.fromtimestamp(post.created_at).strftime("%d %b %Y %H:%M")),
-            why(score[1], score[0]) if score else None, cls="meta"))
+            Div(Span(a.at_handle, cls="handle"), f" · on {on} · ",
+                A(ago(post.created_at), href=thread_url(post), cls="time",
+                  title=datetime.fromtimestamp(post.created_at).strftime("%d %b %Y %H:%M")), cls="byline"),
+            cls="who"),
+        Div(why(score[1], score[0]), cls="meta") if score else None)
     lines = []
     boosted = post.extra.get("boosted_by") or []
     if post.reposted_by or boosted:
@@ -213,15 +215,19 @@ def notification_row(n: Notification):
         cls=f"notif notif-{n.kind}")
 
 
-NAV = [("/", "home", "Home"), ("/compose", "compose", "Post"), ("/notifications", "bell", "Notifications"),
-       ("/feeds", "feeds", "Feeds"), ("/settings", "settings", "Settings")]
+APP_NAME = "Broadsheet"
+
+# (href, label, extra class). "Write" is the button at the right of the masthead, and sits in the middle on a phone.
+NAV = [("/", "Read", ""), ("/notifications", "Activity", ""), ("/compose", "Write", " write"), ("/feeds", "Feeds", ""),
+       ("/settings", "Settings", "")]
 
 
-def page(title: str, *content, active: str = "/", unread: int = 0, wide: bool = False):
-    nav = Nav(*[A(icon(ic), Span(label, cls="nav-label"),
-                  Span(str(unread), cls="dot") if (href == "/notifications" and unread) else None,
-                  href=href, cls="nav-item" + (" active" if href == active else ""), aria_label=label)
-                for href, ic, label in NAV], cls="nav")
-    return (Title(f"{title} · Cross-poster"),
-            Div(Header(A(Span(cls="logo-dot"), Strong("Cross-poster"), href="/", cls="brand"), nav, cls="sidebar"),
-                Main(*content, cls="main" + (" wide" if wide else "")), cls="layout"))
+def page(title: str, *content, active: str = "/", unread: int = 0, wide: bool = False, aside=None):
+    nav = Nav(*[A(label, Span(str(unread), cls="dot", aria_label=f"{unread} new") if (href == "/notifications" and unread)
+                  else None, href=href, cls="nav-item" + extra + (" active" if href == active else ""),
+                  aria_current="page" if href == active else None)
+                for href, label, extra in NAV], cls="nav", aria_label="Sections")
+    return (Title(f"{title} · {APP_NAME}"),
+            Header(Div(A(APP_NAME, href="/", cls="brand"), nav, cls="masthead-inner"), cls="masthead"),
+            Div(Main(*content, cls="main" + (" wide" if wide else "")),
+                Aside(*aside, cls="aside") if aside else None, cls="layout"))

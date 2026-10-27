@@ -1,4 +1,4 @@
-"""Runs Cross-poster inside the Android app: the same FastHTML server, on 127.0.0.1, shown in a WebView.
+"""Runs Broadsheet inside the Android app: the same FastHTML server, on 127.0.0.1, shown in a WebView.
 
 Called from Kotlin through Chaquopy:
 - start(files_dir, port, notifier) when the app opens, returns the per-launch sign-in token.

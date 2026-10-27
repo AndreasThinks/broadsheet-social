@@ -10,7 +10,7 @@ from pathlib import Path
 from PyInstaller.utils.hooks import collect_all, collect_submodules
 
 ROOT = Path(SPECPATH).parent
-NAME = "Cross-poster"
+NAME = "Broadsheet"
 
 datas, binaries, hidden = [], [], []
 for pkg in ("fasthtml", "fastcore", "uvicorn", "starlette", "httpx", "joserfc", "pywebpush", "py_vapid",

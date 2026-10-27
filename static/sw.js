@@ -1,6 +1,6 @@
 // Service worker: shows push notifications and keeps a small offline page.
-const CACHE = "crossposter-v1";
-const SHELL = ["/static/app.css", "/static/app.js", "/static/icons/icon-192.png", "/static/offline.html"];
+const CACHE = "crossposter-v2";
+const SHELL = ["/static/app.css", "/static/fonts/inter-latin.woff2", "/static/fonts/newsreader-latin.woff2", "/static/app.js", "/static/icons/icon-192.png", "/static/offline.html"];
 
 self.addEventListener("install", (event) => {
   event.waitUntil(caches.open(CACHE).then((c) => c.addAll(SHELL)).then(() => self.skipWaiting()));
@@ -32,7 +32,7 @@ self.addEventListener("fetch", (event) => {
 // every other browser delivers it here and we show it ourselves.
 self.addEventListener("push", (event) => {
   let data = {};
-  try { data = event.data ? event.data.json() : {}; } catch (e) { data = { notification: { title: "Cross-poster", body: event.data.text() } }; }
+  try { data = event.data ? event.data.json() : {}; } catch (e) { data = { notification: { title: "Broadsheet", body: event.data.text() } }; }
   const n = data.notification || data;
   const options = {
     body: n.body || "",
@@ -42,7 +42,7 @@ self.addEventListener("push", (event) => {
     data: { url: n.navigate || "/notifications" },
   };
   event.waitUntil(Promise.all([
-    self.registration.showNotification(n.title || "Cross-poster", options),
+    self.registration.showNotification(n.title || "Broadsheet", options),
     self.navigator && self.navigator.setAppBadge ? self.navigator.setAppBadge().catch(() => {}) : Promise.resolve(),
   ]));
 });

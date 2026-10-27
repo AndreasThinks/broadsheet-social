@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <string name="app_name">Cross-poster</string>
+    <string name="app_name">Broadsheet</string>
     <string name="channel_name">Notifications</string>
     <string name="channel_description">Replies, mentions, quotes and follows from your accounts</string>
     <string name="starting">Starting…</string>

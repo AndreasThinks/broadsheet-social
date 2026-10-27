@@ -3,25 +3,24 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Cross-poster downloads</title>
+<title>Broadsheet downloads</title>
 <meta name="description" content="Read and post across Bluesky and Mastodon. Runs entirely on your own device.">
 <style>
-  :root { --bg: #f7f7fb; --card: #fff; --text: #1d1d27; --muted: #5d5d6e; --accent: #4f46e5; --line: #e4e4ee; }
+  :root { --bg: #fff; --card: #fff; --text: #1a1a1a; --muted: #5f5f5f; --accent: #1a1a1a; --on-accent: #fff; --line: #e3e3e3; }
   @media (prefers-color-scheme: dark) {
-    :root { --bg: #121218; --card: #1c1c25; --text: #ececf3; --muted: #a2a2b5; --accent: #8b85ff; --line: #2c2c38; }
+    :root { --bg: #121212; --card: #121212; --text: #ececec; --muted: #a3a3a3; --accent: #ececec; --on-accent: #121212; --line: #2e2e2e; }
   }
   * { box-sizing: border-box; }
   body { margin: 0; background: var(--bg); color: var(--text); font: 16px/1.55 system-ui, -apple-system, "Segoe UI", sans-serif; }
   main { max-width: 760px; margin: 0 auto; padding: 48px 16px 64px; }
-  h1 { font-size: 2rem; margin: 0 0 .25rem; display: flex; align-items: center; gap: .6rem; }
-  h1 span { width: 14px; height: 14px; border-radius: 50%; background: var(--accent); display: inline-block; }
+  h1 { font: 600 2.6rem/1.1 Newsreader, Georgia, "Times New Roman", serif; margin: 0 0 .5rem; padding-bottom: .5rem; border-bottom: 1px solid var(--text); }
   .lede { color: var(--muted); margin: 0 0 2rem; }
   .grid { display: grid; gap: 14px; grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); }
-  .card { background: var(--card); border: 1px solid var(--line); border-radius: 14px; padding: 18px; display: flex; flex-direction: column; gap: .5rem; }
+  .card { background: var(--card); border: 1px solid var(--line); border-radius: 4px; padding: 18px; display: flex; flex-direction: column; gap: .5rem; }
   .card.mine { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }
   .card h2 { font-size: 1.1rem; margin: 0; }
   .card p { margin: 0; color: var(--muted); font-size: .92rem; flex: 1; }
-  .btn { display: inline-block; text-align: center; background: var(--accent); color: #fff; text-decoration: none; padding: .6rem .9rem; border-radius: 10px; font-weight: 600; }
+  .btn { display: inline-block; text-align: center; background: var(--accent); color: var(--on-accent); text-decoration: none; padding: .6rem .9rem; border-radius: 4px; font-weight: 600; }
   section { margin-top: 2.5rem; }
   section h3 { font-size: 1rem; margin: 0 0 .5rem; }
   section p, section li { color: var(--muted); font-size: .95rem; }
@@ -31,24 +30,24 @@
 </head>
 <body>
 <main>
-  <h1><span></span>Cross-poster</h1>
+  <h1>Broadsheet</h1>
   <p class="lede">Read and post across Bluesky and Mastodon from one app. It runs entirely on your device: your accounts and posts never pass through anyone else's server.</p>
 
   <div class="grid">
     <div class="card" data-os="android">
       <h2>Android</h2>
       <p>Android 8 or later. Allow installs from your browser when asked.</p>
-      <a class="btn" href="downloads/Cross-poster-android.apk">Download APK</a>
+      <a class="btn" href="downloads/Broadsheet-android.apk">Download APK</a>
     </div>
     <div class="card" data-os="windows">
       <h2>Windows</h2>
-      <p>Unzip, then open <code>Cross-poster.exe</code>. Choose "More info → Run anyway" the first time.</p>
-      <a class="btn" href="downloads/Cross-poster-windows.zip">Download for Windows</a>
+      <p>Unzip, then open <code>Broadsheet.exe</code>. Choose "More info → Run anyway" the first time.</p>
+      <a class="btn" href="downloads/Broadsheet-windows.zip">Download for Windows</a>
     </div>
     <div class="card" data-os="mac">
       <h2>macOS</h2>
       <p>Unzip and move to Applications. Right-click → Open the first time.</p>
-      <a class="btn" href="downloads/Cross-poster-macos.zip">Download for Mac</a>
+      <a class="btn" href="downloads/Broadsheet-macos.zip">Download for Mac</a>
     </div>
   </div>
 
