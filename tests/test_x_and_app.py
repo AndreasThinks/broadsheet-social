@@ -1,4 +1,5 @@
 import os
+import re
 
 import pytest
 from starlette.testclient import TestClient
@@ -79,9 +80,22 @@ def test_feed_order_and_visibility(client):
         client.post("/feeds/quiet_posters/visibility")
         assert 'href="/?custom=quiet_posters"' in client.get("/").text
 
-        client.post("/feeds/across_networks/move?step=-1")
+        page = client.get("/feeds/arrange").text
+        keys = re.findall(r'data-key="([^"]+)"', page)
+        assert "across_networks" in keys and any(k.startswith("native|") for k in keys)
+        # Put a network's own feed first, Across networks before Combined, and show an unpinned native feed.
+        native = next(k for k in keys if k.startswith("native|") and k.endswith("bluesky:following"))
+        discover = next(k for k in keys if k.endswith("bluesky:discover"))
+        order = [native, "across_networks", "combined"] + [k for k in keys if k not in (native, "across_networks", "combined")]
+        r = client.post("/feeds/arrange", json={"tabs": [{"key": k, "visible": k != "quiet_posters" and
+                                                          (k == discover or not k.startswith("native|") or k == native)}
+                                                         for k in order]})
+        assert r.json() == {"ok": True}
         home = client.get("/").text
-        assert home.index("?custom=across_networks") < home.index("?custom=combined")
+        assert home.index("bluesky%3Afollowing") < home.index("?custom=across_networks") < home.index("?custom=combined")
+        assert "bluesky%3Adiscover" in home and "mastodon%3Ahome" not in home
+        assert 'href="/?custom=quiet_posters"' not in home
+        assert 'data-refresh="/timeline?custom=combined&amp;fresh=1"' in home
         assert "feed-bar" in home
     finally:
         db.set("feed_prefs", {})

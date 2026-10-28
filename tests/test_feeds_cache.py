@@ -122,6 +122,13 @@ def test_starter_gallery_install_remove_and_arrange(tmp_path):
 
     loaded = feeds.all_feeds()
     slugs = [lf.slug for lf in loaded]
-    prefs = feeds.move({}, slugs, slugs[-1], -1)
-    ordered, hidden = feeds.arrange(loaded, {**prefs, "hidden": ["combined"]})
-    assert [lf.slug for lf in ordered][-2] == slugs[-1] and hidden == {"combined"}
+    ordered, hidden = feeds.arrange(loaded, {"order": [slugs[-1]], "hidden": ["combined"]})
+    assert [lf.slug for lf in ordered] == [slugs[-1]] + slugs[:-1] and hidden == {"combined"}
+
+
+def test_save_arrangement_keeps_absent_tabs():
+    prefs = {"order": ["a", "gone", "b"], "hidden": ["gone"], "shown": ["gone-native"], "other": 1}
+    tabs = [("b", True, True), ("n", True, False), ("a", False, True)]
+    new = feeds.save_arrangement(prefs, tabs, {"a", "b", "n"})
+    assert new["order"] == ["b", "n", "a", "gone"]
+    assert new["hidden"] == ["a", "gone"] and new["shown"] == ["gone-native", "n"] and new["other"] == 1

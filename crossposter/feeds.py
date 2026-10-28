@@ -5,8 +5,8 @@ A feed file defines `feed = Feed(...)`, an optional `keep(post, ctx) -> bool` an
 "why am I seeing this" breakdown). Files reload automatically when you save them.
 
 Starter feeds ship in the repo's feeds/ folder; any your feeds folder doesn't have yet are offered
-under "Add more feeds" on the Feeds page. Tab order and which feeds show on Home are saved in the
-database (feed_prefs), not in the files.
+under "Add more feeds" on the Feeds page. Tab order and which feeds show on Home (set on the Arrange tabs page) are
+saved in the database (feed_prefs), not in the files.
 
 Sources a feed can draw from:
     bluesky:following      bluesky:discover        bluesky:feed:<at:// uri>   bluesky:list:<at:// uri>
@@ -264,20 +264,25 @@ def remove_feed(slug: str, feeds_dir: Path | None = None) -> bool:
     return True
 
 
-def arrange(loaded: list[LoadedFeed], prefs: dict) -> tuple[list[LoadedFeed], set[str]]:
-    """Order feeds by the saved order (unlisted ones keep file order, after), and return the hidden slugs."""
-    order = {slug: i for i, slug in enumerate(prefs.get("order") or [])}
-    ranked = sorted(enumerate(loaded), key=lambda t: (order.get(t[1].slug, len(order) + t[0]), t[0]))
-    return [lf for _, lf in ranked], set(prefs.get("hidden") or [])
+def arrange(items: list, prefs: dict, key: Callable = lambda lf: lf.slug) -> tuple[list, set[str]]:
+    """Order items by the saved order (unlisted ones keep their given order, after), and return the hidden keys.
+
+    The saved order holds the keys of every Home tab: custom feed slugs and native feed keys alike."""
+    order = {k: i for i, k in enumerate(prefs.get("order") or [])}
+    ranked = sorted(enumerate(items), key=lambda t: (order.get(key(t[1]), len(order) + t[0]), t[0]))
+    return [it for _, it in ranked], set(prefs.get("hidden") or [])
 
 
-def move(prefs: dict, slugs: list[str], slug: str, step: int) -> dict:
-    order = [s for s in prefs.get("order") or [] if s in slugs] + [s for s in slugs if s not in (prefs.get("order") or [])]
-    if slug in order:
-        i = order.index(slug)
-        j = max(0, min(len(order) - 1, i + step))
-        order[i], order[j] = order[j], order[i]
-    return {**prefs, "order": order}
+def save_arrangement(prefs: dict, tabs: list[tuple[str, bool, bool]], present: set[str]) -> dict:
+    """New prefs from the Arrange page: tabs is [(key, visible, visible_by_default)] in the chosen order.
+
+    Tabs that aren't listed right now (say an account whose feeds couldn't be fetched) keep their saved place
+    and visibility, so a network hiccup doesn't scramble the order."""
+    keys = [k for k, _, _ in tabs]
+    order = keys + [k for k in prefs.get("order") or [] if k not in keys and k not in present]
+    hidden = {k for k in prefs.get("hidden") or [] if k not in present} | {k for k, vis, dflt in tabs if dflt and not vis}
+    shown = {k for k in prefs.get("shown") or [] if k not in present} | {k for k, vis, dflt in tabs if vis and not dflt}
+    return {**prefs, "order": order, "hidden": sorted(hidden), "shown": sorted(shown)}
 
 
 @dataclass
