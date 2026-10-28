@@ -1041,7 +1041,7 @@ async def get(q: str = "", fresh: int = 0):
                       Button("Search", cls="small"), method="get", action="/feeds/community", cls="row connect"),
                  stats_prompt_card(),
                  Ol(*rows, cls="community-list") if rows else P("Nothing matches that.", cls="muted"),
-                 P(A("Browse on the web", href=settings.directory_url, target="_blank", rel="noopener"), " · ",
+                 P(A("Browse on the web", href=f"{settings.directory_url}/feeds", target="_blank", rel="noopener"), " · ",
                    A("Refresh", href="/feeds/community?fresh=1"), cls="muted small"),
                  active="/feeds")
 
@@ -1183,7 +1183,7 @@ async def get(ok: str = ""):
                            "else to delete.", cls="muted small"),
                          Details(Summary("Last report sent"), Pre(Code(json.dumps(last["report"], indent=2)))) if last else None,
                          cls="panel"),
-                 P(A("See the public dashboard", href=settings.directory_url, target="_blank", rel="noopener")),
+                 P(A("See the public dashboard", href=f"{settings.directory_url}/feeds", target="_blank", rel="noopener")),
                  active="/settings")
 
 

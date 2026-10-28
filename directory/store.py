@@ -73,7 +73,12 @@ def recent_weeks(n: int, t: float | None = None) -> list[str]:
 
 def slugify(name: str) -> str:
     s = re.sub(r"[^a-z0-9]+", "-", name.lower()).strip("-")
-    return s[:50] or "feed"
+    s = s[:50] or "feed"
+    return s + "-feed" if s in RESERVED_SLUGS else s
+
+
+# Pages of the site that sit under /feeds/, so no feed can take their address.
+RESERVED_SLUGS = {"share"}
 
 
 class Store:

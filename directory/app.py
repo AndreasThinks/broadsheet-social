@@ -11,6 +11,7 @@ Downloads are stored in DATA_DIR/releases.
 """
 from __future__ import annotations
 
+import ast
 import hmac
 import json
 import os
@@ -19,9 +20,9 @@ from datetime import datetime
 from pathlib import Path
 from urllib.parse import urlencode
 
-from fasthtml.common import (A, Button, Code, Div, Em, Footer, Form, H1, H2, H3, Header, Input, Label, Li, Main, Nav, Ol,
-                             Option, P, Pre, Script, Section, Select, Span, Strong, Table, Tbody, Td, Textarea, Title, Tr, Ul,
-                             Link, Meta, fast_app)
+from fasthtml.common import (A, Article, Button, Code, Details, Div, Footer, Form, H1, H2, H3, Header, Input, Label, Li,
+                             Link, Main, Meta, Nav, Noscript, NotStr, Ol, Option, P, Pre, Script, Section, Select, Span, Strong,
+                             Summary, Table, Tbody, Td, Textarea, Th, Thead, Title, Tr, Ul, fast_app)
 from starlette.concurrency import run_in_threadpool
 from starlette.requests import Request
 from starlette.responses import FileResponse, JSONResponse, RedirectResponse, Response
@@ -74,8 +75,8 @@ def is_admin(session) -> bool:
     return bool(ADMIN_PASSWORD) and session.get("admin") is True
 
 
-def layout(title: str, *content, active: str = "/", session=None):
-    links = [("/", "Get the app"), ("/feeds", "Community feeds"), ("/data", "How the numbers work"), ("/write", "Write a feed")]
+def layout(title: str, *content, active: str = "/", session=None, main_cls: str = "page"):
+    links = [("/feeds", "Feeds"), ("/download", "Download"), ("/privacy", "Privacy")]
     if session is not None and is_admin(session):
         links.append(("/review", f"Review {len(store.queue()) or ''}".strip()))
     return (Title(f"{title} · Broadsheet"),
@@ -83,27 +84,22 @@ def layout(title: str, *content, active: str = "/", session=None):
                        Nav(*[A(label, href=h, cls="active" if h == active else None,
                                aria_current="page" if h == active else None) for h, label in links],
                            cls="nav", aria_label="Sections"),
-                       A("Download", href="/#download", cls="button primary"), cls="wrap"), cls="masthead"),
-            Main(*content, cls="wrap page"),
-            Footer(Div(Span("Broadsheet runs on your device. Your accounts, posts and feeds never pass through this site."),
-                       A("Source on GitHub", href=SOURCE_URL), A("Data we keep", href="/data"), cls="wrap"), cls="footer"))
+                       A("Open Broadsheet", href="/web", cls="button primary open"), cls="wrap"), cls="masthead"),
+            Main(*content, cls=f"wrap {main_cls}"),
+            Footer(Div(Span("Broadsheet runs on your device or in your browser. Your accounts and posts never pass through "
+                            "this site."),
+                       A("Source on GitHub", href=SOURCE_URL), A("Privacy", href="/privacy"), cls="wrap"), cls="footer"))
 
 
 def numbers_box():
     return Section(
-        H2("How the numbers work"),
-        P("Broadsheet keeps your accounts and posts on your device. Downloads are counted for everyone: the site adds one "
-          "each time an app fetches a feed, and keeps nothing about who fetched it."),
-        P("Everything else comes only from people who said yes to ", Em("Share anonymous feed stats"),
-          ". Each app is asked once, with neither answer picked, and can change its mind in Settings."),
-        Ul(Li(Span("✓", cls="yes"), Span("Once a week, a few counts per community feed: is it on Home, how often it was "
-                                         "opened, how many posts were read.")),
+        H2("In short"),
+        Ul(Li(Span("✓", cls="yes"), Span("Downloads are counted, with nothing kept about who downloaded.")),
+           Li(Span("✓", cls="yes"), Span("Apps that said yes send a few counts per community feed once a week.")),
            Li(Span("✕", cls="no"), Span("Never handles, accounts, posts, follows, or feeds people wrote themselves.")),
-           Li(Span("✕", cls="no"), Span("No device ID and no IP addresses kept. Reports are added to weekly totals and "
-                                        "thrown away.")),
+           Li(Span("✕", cls="no"), Span("No device ID and no IP addresses kept.")),
            Li(Span("✓", cls="yes"), Span(f"A weekly figure only shows once {MIN_REPORTS} or more apps report it.")),
-           cls="checks"),
-        P(A("See exactly what a report contains", href="/data"), cls="small"))
+           cls="checks"))
 
 
 def sort_key(sort: str):
@@ -112,9 +108,9 @@ def sort_key(sort: str):
     return {
         "kept": lambda f: ((f["stats"] or {}).get("long_term_share", -1), f["downloads"]),
         "rising": lambda f: ((f["stats"] or {}).get("users_change") or -9, users(f)),
-        "downloads": lambda f: (f["downloads"],),
+        "downloads": lambda f: (users(f), f["downloads"]),
         "newest": lambda f: (f["created_at"],),
-    }.get(sort, lambda f: (f["downloads"],))
+    }.get(sort, lambda f: (users(f), f["downloads"]))
 
 
 def spark(stats_weeks: list[dict]) -> str:
@@ -127,64 +123,152 @@ def spark(stats_weeks: list[dict]) -> str:
     return " ".join(f"{2 + i * 52 / (len(vals) - 1):.1f},{18 - (v - lo) / span * 16:.1f}" for i, v in pts)
 
 
+def try_link(slug: str) -> str:
+    """The feed's page inside the browser version, where it can be added (see web/shell.js)."""
+    return f"/web/feeds/community/{slug}"
+
+
+def is_new(f: dict) -> bool:
+    return datetime.now().timestamp() - f["created_at"] < 30 * 86400
+
+
+def feed_card(f: dict, cta: bool = True):
+    """One feed in a grid: shows numbers only once the feed has some."""
+    s = f["stats"]
+    usage = (f"{n(s['users'])} people this week" if s else
+             f"{n(f['downloads'])} download{'s' if f['downloads'] != 1 else ''}" if f["downloads"] else None)
+    return Article(
+        Span("New", cls="new-badge") if is_new(f) and not s else None,
+        H3(A(f["name"], href=f"/feeds/{f['slug']}")),
+        P(f["description"], cls="desc"),
+        Div(Span(f"by {f['credit']}" if f["credit"] else "Shared anonymously"), Span(*pills(f["sources"])), cls="card-foot"),
+        P(usage, cls="usage") if usage else None,
+        Div(A("Open in your browser", href=try_link(f["slug"]), cls="button"),
+            A("Details", href=f"/feeds/{f['slug']}"), cls="row") if cta else
+        Div(A("Open in your browser", href=try_link(f["slug"])), cls="row"),
+        cls="feed-card")
+
+
 # ---------- the app and its downloads ----------
 
 PLATFORMS = (
-    ("android", "Android", "Broadsheet-android.apk", "Download APK",
-     ("Android 8 or later. Allow installs from your browser when asked.",)),
-    ("windows", "Windows", "Broadsheet-windows.zip", "Download for Windows",
-     ("Unzip, then open ", Code("Broadsheet.exe"), ". Choose “More info › Run anyway” the first time.")),
-    ("mac", "macOS", "Broadsheet-macos.zip", "Download for Mac",
-     ("Unzip and move it to Applications. Right-click › Open the first time.",)),
+    ("android", "Android", "Broadsheet-android.apk", "Download APK", "Android 8 or later",
+     ("Open the downloaded file.", "Allow installs from your browser when Android asks.",
+      "To update, install a new APK over the old one, or let Obtainium do it.")),
+    ("windows", "Windows", "Broadsheet-windows.zip", "Download for Windows", "",
+     ("Unzip the download.", ("Open ", Code("Broadsheet.exe"), "."),
+      ("Windows warns you the first time. Choose ", Strong("More info"), ", then ", Strong("Run anyway"), "."))),
+    ("mac", "macOS", "Broadsheet-macos.zip", "Download for Mac", "",
+     ("Unzip it and move Broadsheet to Applications.",
+      ("The first time, right-click it and choose ", Strong("Open"), "."))),
 )
-# Put the visitor's own platform first.
-PICK_OS = Script("""const ua = navigator.userAgent;
-const os = /Android/.test(ua) ? "android" : /Windows/.test(ua) ? "windows" : /Mac/.test(ua) ? "mac" : "";
-const mine = os && document.querySelector(`[data-os="${os}"]`);
-if (mine) { mine.classList.add("mine"); mine.parentNode.prepend(mine); }""")
+OS_NAMES = {key: label for key, label, *_ in PLATFORMS}
+# Find the visitor's platform: name the download button after it, and on Android lead with it (that's where the
+# installed app adds most). Old links to /#download now go to the Download page.
+PICK_OS = Script("""if (location.hash === "#download") location.replace("/download");
+const ua = navigator.userAgent;
+const os = /Android/.test(ua) ? "android" : /Windows/.test(ua) ? "windows" : /Macintosh|Mac OS X/.test(ua) && !/Mobile/.test(ua) ? "mac" : "";
+const names = %s;
+const dl = document.getElementById("door-download"), web = document.getElementById("door-web");
+if (dl && os) { dl.textContent = "Download for " + names[os]; dl.href = "/download#" + os; }
+if (dl && os === "android") { dl.classList.add("primary"); web.classList.remove("primary"); dl.after(web); }
+const mine = os && document.querySelector(`.platform[data-os="${os}"]`);
+if (mine) { mine.classList.add("mine"); mine.parentNode.prepend(mine); }""" % json.dumps(OS_NAMES))
+
+
+def app_picture():
+    """A drawing of the reading view, with made-up people, so the front page shows what Broadsheet looks like."""
+    posts = (("bluesky", "Priya Raman", "12m", "New chart: solar's share of global electricity passed 9% this year, faster "
+              "than any forecast from 2015.", "Also on Mastodon · 3 people you follow shared this link"),
+             ("mastodon", "Tom Ellery", "40m", "Every service form should start by asking what you're trying to do, then "
+              "ask only what that needs.", None),
+             ("bluesky", "Jo Mensah", "1h", "Writing up this week's newsletter now. Shorter than usual, which is good news "
+              "for everyone.", None))
+    return Div(Div(Strong("Broadsheet"), Span("Read", cls="on"), Span("Activity"), Span("Feeds"), cls="pic-bar"),
+               Div(Span("Following", cls="on"), Span("Across networks"), Span("Links worth reading"), Span("Quiet posters"),
+                   cls="pic-tabs"),
+               *[Div(Span(cls=f"pic-av {net}"),
+                     Div(Div(Strong(who), Span(f" · {when}"), cls="pic-who"), P(text), P(also, cls="pic-also") if also else None),
+                     cls="pic-post") for net, who, when, text, also in posts],
+               cls="app-picture", aria_hidden="true")
 
 
 @rt("/")
 def get(session):
     rel = releases.current()
-    cards = [Div(H2(label), P(*note), A(button, href=f"/downloads/{fname}", cls="button primary") if rel
-                 else Span("Coming soon", cls="muted"),
-                 P(f"{rel['sizes'][fname] / 1048576:.0f} MB", cls="muted small") if rel else None,
-                 cls="download", data_os=key) for key, label, fname, button, note in PLATFORMS]
-    top = sorted(store.feeds(), key=lambda f: f["downloads"], reverse=True)[:3]
-    return layout("Get the app", Div(
-        P("Bluesky · Mastodon · X", cls="kicker"), H1("Broadsheet"),
-        P("Read and post across your networks from one app. It runs entirely on your device: your accounts and posts "
-          "never pass through anyone else's server.", cls="dek"),
-        Div(*cards, cls="downloads", id="download"),
-        P(f"Built from commit {rel['commit'][:7]} on {day(rel['published_at'])}." if rel else
-          "The first build hasn't been published yet.", cls="muted small"),
-        Section(H2("Or use it in your browser"),
-                P("Nothing to install: Broadsheet runs inside the web page, and your accounts, posts and feeds stay in "
-                  "that browser. This site never sees them. The first visit downloads about 20 MB."),
-                P("The browser version does Bluesky and Mastodon. X doesn't let web pages connect to it, so for X use one "
-                  "of the apps above. Mastodon can notify you while the page is closed; Bluesky only while it's open. "
-                  "Clearing your browser's data for this site signs you out, so keep a backup from Settings.",
-                  cls="muted"),
-                P(A("Open Broadsheet in your browser", href="/web", cls="button primary")), cls="block", id="browser"),
-        Section(H2("Staying up to date"),
-                P("The desktop apps update themselves: they fetch new versions in the background and switch over the next "
-                  "time you open them. On Android, install the new APK over the old one, or add this page to ",
-                  A("Obtainium", href="https://obtainium.imranr.dev/"), " to get updates automatically."), cls="block"),
-        Section(H2("Notifications"),
-                P("On Android, the app checks for replies, mentions, quotes and follows about every 15 minutes, even when "
-                  "it's closed. Android may check less often to save battery."), cls="block"),
-        Section(H2("Community feeds"),
-                P("Ranking rules people have written for Broadsheet, each a short Python file that runs on your device. "
-                  "Add them in the app under Feeds › Community."),
-                Ul(*[Li(A(f["name"], href=f"/feeds/{f['slug']}"), Span(f" · {f['description']}", cls="muted"))
-                     for f in top], cls="checks") if top else None,
-                P(A("Browse all community feeds", href="/feeds", cls="button")), cls="block"),
-        cls="content"),
-        Div(Section(H3("Your data stays with you"),
-                    P("The apps keep your accounts, feeds and database in your own user data folder. This site only "
-                      "hands out the apps and the community feeds, and keeps nothing about who downloads them.")),
-            cls="side"), PICK_OS, active="/", session=session)
+    top = sorted(store.feeds(), key=sort_key("downloads"), reverse=True)[:3]
+    direct = [A(label, href=f"/downloads/{fname}") for _, label, fname, *_ in PLATFORMS]
+    yes, no = Span("Yes", cls="yes"), Span("No", cls="muted")
+    return layout("Read and post across your networks", Div(
+        Div(Div(P("For Bluesky and Mastodon · X in the apps", cls="kicker"),
+                H1("All your timelines, read like one paper."),
+                P("Broadsheet puts Bluesky and Mastodon in one calm reading view, posts to both at once, and ranks your "
+                  "timeline with feeds you can read and change.", cls="dek"),
+                Div(A("Open in your browser", href="/web", cls="button primary large", id="door-web"),
+                    A("Download the app", href="/download", cls="button large", id="door-download"), cls="row doors"),
+                P(Span("No sign-up"), Span("Free and open source"), Span("Your accounts stay on your device"), cls="reassure"),
+                P("Download directly: ", *[x for a in direct for x in (a, " · ")][:-1], cls="muted small") if rel else
+                P("The apps are coming soon.", cls="muted small"), cls="hero-text"),
+            app_picture(), cls="hero"),
+        Div(Section(H3("One timeline, every network"),
+                    P("Posts from Bluesky and Mastodon together. A post cross-posted to both shows once.")),
+            Section(H3("Feeds you can read"),
+                    P("Each feed is a short ranking rule. Use the community's, or write your own.")),
+            Section(H3("Nothing on our server"),
+                    P("The app runs on your device or in your browser. This site never sees your accounts. ",
+                      A("What we keep", href="/privacy"))), cls="three"),
+        Section(H2("Browser or app?"),
+                Div(Table(Thead(Tr(Th(""), Th("In your browser"), Th("Windows and Mac"), Th("Android"))),
+                          Tbody(Tr(Th("Getting started"), Td("Open the page"), Td("Download and unzip"), Td("Install the APK")),
+                                Tr(Th("Bluesky and Mastodon"), Td(yes), Td(yes), Td(yes)),
+                                Tr(Th("X"), Td(no), Td(yes), Td(yes)),
+                                Tr(Th("Alerts while closed"), Td("Mastodon only"), Td(no), Td("About every 15 minutes")),
+                                Tr(Th("Updates"), Td("Automatic"), Td("Automatic"), Td("Install over it, or use Obtainium")),
+                                Tr(Th("Where your data lives"), Td("This browser"), Td("Your user folder"), Td("The app"))),
+                          cls="compare"), cls="scroll"),
+                P("Clearing your browser's data for this site signs the browser version out, so keep a backup from its "
+                  "Settings. The first visit downloads about 20 MB.", cls="muted small"), cls="block"),
+        Section(H2("From the community"),
+                Div(*[feed_card(f, cta=False) for f in top], cls="feed-cards three-up") if top else None,
+                P(A("All community feeds →", href="/feeds")), cls="block") if top else None,
+        cls="home-body"), PICK_OS, active="/", session=session, main_cls="home")
+
+
+@rt("/download")
+def get(session):
+    rel = releases.current()
+    platforms = []
+    for key, label, fname, button, needs, steps in PLATFORMS:
+        size = f"{rel['sizes'][fname] / 1048576:.0f} MB" if rel and fname in rel["sizes"] else ""
+        platforms.append(Section(
+            Div(H2(label), Span(" · ".join(x for x in (needs, size) if x), cls="muted small"), cls="platform-head"),
+            A(button, href=f"/downloads/{fname}", cls="button primary") if rel else Span("Coming soon", cls="muted"),
+            Ol(*[Li(*(s if isinstance(s, tuple) else (s,))) for s in steps]),
+            cls="platform", data_os=key, id=key))
+    faq = (("How do updates work?",
+            "The desktop apps fetch new versions in the background and switch over the next time you open them. The "
+            "browser version is always the latest. On Android, install the new APK over the old one."),
+           ("Can Android update automatically?",
+            ("Yes, with ", A("Obtainium", href="https://obtainium.imranr.dev/"),
+             ". Add this site's front page as the source and it finds new APKs.")),
+           ("Will I get notifications?",
+            "On Android, the app checks for replies, mentions, quotes and follows about every 15 minutes, even when it's "
+            "closed (Android may check less often to save battery). The browser version can notify you about Mastodon "
+            "while the page is closed, and about Bluesky only while it's open."),
+           ("Which version is this?",
+            f"Built from commit {rel['commit'][:7]} on {day(rel['published_at'])}." if rel else
+            "The first build hasn't been published yet."))
+    return layout("Download", Div(
+        P("Download", cls="kicker"), H1("Get Broadsheet"),
+        P("The same app on every platform. It runs entirely on your device.", cls="dek"),
+        Div(Div(*platforms, cls="platforms"),
+            Div(Section(H2("Or skip the install"),
+                        P("Broadsheet also runs inside a web page, with Bluesky and Mastodon. Your accounts stay in that "
+                          "browser."),
+                        A("Open in your browser", href="/web", cls="button")),
+                Section(H2("Questions"), *[Details(Summary(q), P(*(a if isinstance(a, tuple) else (a,)))) for q, a in faq],
+                        cls="faq"), cls="side"), cls="download-grid"),
+        cls="content wide"), PICK_OS, active="/download", session=session)
 
 
 def _release_file(name: str):
@@ -298,6 +382,27 @@ def get(fname: str):
 
 # ---------- directory ----------
 
+def explain(source: str) -> tuple[list[str], list[str]]:
+    """A feed's own explanation (its docstring, as paragraphs) and the names of the parts its score() adds up."""
+    try:
+        tree = ast.parse(source)
+    except SyntaxError:
+        return [], []
+    paras = [" ".join(p.split()) for p in (ast.get_docstring(tree) or "").split("\n\n") if p.strip()]
+    parts = []
+    for node in tree.body:
+        if isinstance(node, ast.FunctionDef) and node.name == "score":
+            for ret in ast.walk(node):
+                if isinstance(ret, ast.Return) and isinstance(ret.value, ast.Dict):
+                    parts += [k.value for k in ret.value.keys if isinstance(k, ast.Constant) and isinstance(k.value, str)]
+    return paras, list(dict.fromkeys(parts))
+
+
+def source_label(src: str) -> str:
+    net, _, name = src.partition(":")
+    return f"{NETS.get(net, net)} {name.replace('-', ' ')}".strip()
+
+
 @rt("/feeds")
 def get(session, q: str = "", net: str = "", sort: str = "downloads"):
     feeds = store.feeds()
@@ -309,60 +414,62 @@ def get(session, q: str = "", net: str = "", sort: str = "downloads"):
     elif net in NETS:
         feeds = [f for f in feeds if net in networks(f["sources"])]
     feeds.sort(key=sort_key(sort), reverse=True)
-    rows = []
-    for i, f in enumerate(feeds, 1):
-        s = f["stats"]
-        pts = spark(store.weekly(f["slug"], 12))
-        rows.append(Li(
-            Span(str(i), cls="rank"),
-            Div(Div(A(f["name"], href=f"/feeds/{f['slug']}", cls="name"), " ",
-                    Span(f"by {f['credit']}" if f["credit"] else "anonymous", cls="muted small"), " ",
-                    Span("✓ Reviewed", cls="reviewed")),
-                P(f["description"], cls="desc"), Div(*pills(f["sources"])), cls="about"),
-            Div(Div(Div("Downloads", cls="label"), Div(n(f["downloads"]), cls="value"), cls="num"),
-                Div(Div("Weekly users", cls="label"),
-                    Div(n(s["users"]) if s else "Too new", " ",
-                        _spark_svg(pts) if pts else None, cls="value"), cls="num"),
-                Div(Div("Using it 30+ days", cls="label"), Div(pct(s["long_term_share"]) if s else "–", cls="value"), cls="num"),
-                Div(Div("Read per visit", cls="label"), Div(f"{s['read_per_visit']:.0f} posts" if s else "–", cls="value"),
-                    cls="num"),
-                A("Details", href=f"/feeds/{f['slug']}", cls="button"), cls="nums"),
-            cls="feed-row"))
-    total = store.total_downloads()
-    return layout("Directory", Div(
-        P("The directory", cls="kicker"), H1("Community feeds"),
-        P("Ranking rules people have written for Broadsheet. Each one is a short Python file that runs on your own device, "
-          "on posts already in your timelines. Open Broadsheet, go to Feeds › Community, read the code, and add it in a tap.",
-          cls="dek"),
-        Div(Div(Div(n(len(store.feeds())), cls="value"), Div("feeds listed", cls="sub"), cls="tile"),
-            Div(Div(n(total), cls="value"), Div("feed downloads, all time", cls="sub"), cls="tile"),
-            Div(Div(n(store.reporting_apps()), cls="value"), Div("apps sharing anonymous stats this week", cls="sub"),
-                cls="tile"), cls="tiles"),
-        Form(Label("Search", Input(type="search", name="q", value=q, placeholder="News, art, quiet people, links…"),
-                   cls="field grow"),
-             Label("Works with", Select(*[Option(lbl, value=v, selected=v == net) for v, lbl in
-                                          (("", "Any network"), ("bluesky", "Bluesky"), ("mastodon", "Mastodon"),
-                                           ("across", "More than one network"))], name="net"), cls="field"),
-             Label("Sort by", Select(*[Option(lbl, value=v, selected=v == sort) for v, lbl in
-                                       (("downloads", "Most downloaded"), ("kept", "Most kept"), ("rising", "Rising this week"),
-                                        ("newest", "Newest"))], name="sort"), cls="field"),
-             Button("Show", cls="button"), method="get", action="/feeds", cls="filters"),
-        Ol(*rows, cls="feed-list") if rows else P("No feeds match that.", cls="muted"),
-        P(f"Feeds with fewer than {MIN_REPORTS} apps reporting show “Too new” instead of weekly figures.", cls="muted small"),
-        cls="content"),
-        Div(numbers_box(),
-            Section(H2("Share a feed you wrote"),
-                    P("Open the feed in Broadsheet and choose ", Em("Share with the community"),
-                      ". A maintainer reads the code before it's listed."),
-                    A("How sharing works", href="/write", cls="button primary")),
-            cls="side"), active="/feeds", session=session)
+
+    def chip(value, label):
+        params = {k: v for k, v in (("q", q), ("net", value), ("sort", sort if sort != "downloads" else "")) if v}
+        return A(label, href="/feeds" + ("?" + urlencode(params) if params else ""), cls="chip on" if value == net else "chip",
+                 aria_current="true" if value == net else None)
+
+    return layout("Community feeds", Div(
+        Div(P("Community feeds", cls="kicker"), H1("Ways to read your timeline"),
+            P("Each feed is a short ranking rule that runs on your device, on posts already in your timelines. Every one "
+              "is read by a maintainer before it's listed.", cls="dek"), cls="intro"),
+        Form(Div(chip("", "All"), chip("bluesky", "Bluesky"), chip("mastodon", "Mastodon"),
+                 chip("across", "Across networks"), cls="chips", aria_label="Works with"),
+             Input(type="hidden", name="net", value=net) if net else None,
+             Label(Span("Search feeds", cls="visually-hidden"),
+                   Input(type="search", name="q", value=q, placeholder="Search feeds"), cls="grow"),
+             Label(Span("Sort", cls="visually-hidden"),
+                   Select(*[Option(lbl, value=v, selected=v == sort) for v, lbl in
+                            (("downloads", "Popular"), ("kept", "Most kept"), ("rising", "Rising this week"),
+                             ("newest", "Newest"))], name="sort", onchange="this.form.submit()")),
+             Noscript(Button("Show", cls="button")), method="get", action="/feeds", cls="filters"),
+        Div(*[feed_card(f) for f in feeds], cls="feed-cards") if feeds else P("No feeds match that.", cls="muted"),
+        Div(P("Wrote a feed you like? Share it from the app, and a maintainer reads it before it's listed."),
+            A("How sharing works", href="/feeds/share", cls="button"), cls="band"),
+        cls="content"), active="/feeds", session=session, main_cls="page single")
 
 
 def _spark_svg(points: str):
-    from fasthtml.common import NotStr
     return NotStr(f'<svg role="img" aria-label="Weekly users, last 12 weeks" width="56" height="20" viewBox="0 0 56 20" '
                   f'style="vertical-align:middle"><polyline points="{points}" fill="none" stroke="currentColor" '
                   f'stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="color:var(--accent)"/></svg>')
+
+
+@rt("/feeds/share")
+def get(session):
+    return layout("Share a feed", Div(
+        P(A("← All feeds", href="/feeds"), cls="small"),
+        P("For authors", cls="kicker"), H1("Write and share a feed"),
+        P("A feed is a Python file with a name, the timelines it reads, and a score() function that ranks posts.", cls="dek"),
+        Ol(Li("In Broadsheet, open Feeds and choose New feed, or copy one you like."),
+           Li("Save it and use it for a while. Preview shows the top posts and why each one ranked."),
+           Li("When you're happy, choose Share with the community. The app checks for anything personal first, such as "
+              "one of your lists."),
+           Li("A maintainer reads the code, usually within a few days. Follow it under Feeds › Your submissions."),
+           Li("Once listed, it appears here and in everyone's Community tab. Updates go through the same review."),
+           cls="steps"),
+        Section(H2("What shared feeds can use"),
+                P("Only ", Code("crossposter.feeds"), " and standard tools like ", Code("math"), ", ", Code("collections"),
+                  " and ", Code("re"), ". No network, files, ", Code("eval"), " or ", Code("exec"),
+                  ". Feeds only see posts already fetched into your timelines."), cls="block"),
+        Section(H2("What sharing sends"),
+                P("The file, its name and description, and the credit line if you gave one. Never your handle or accounts. "
+                  "The app keeps a private receipt so it can check on the review; this site keeps only a fingerprint of it."),
+                cls="block"),
+        cls="content"), Div(Section(H3("Start from one of these"),
+                                    Ul(*[Li(A(f["name"], href=f"/feeds/{f['slug']}#code")) for f in store.feeds()[:5]],
+                                       cls="checks")), cls="side"), active="/feeds", session=session)
 
 
 @rt("/feeds/{slug}")
@@ -371,25 +478,26 @@ def get(slug: str, session):
     if not f:
         return Response("No feed by that name.", status_code=404)
     s = f["stats"]
-    weeks = store.weekly(slug, 12)
-    top = max([w["users"] for w in weeks if w["shown"]] + [1])
-    scale = max(10, int(top * 1.15))
-    bars = []
-    for w in weeks:
-        label = w["week"].split("-W")[1]
-        if w["shown"]:
-            bars.append(Div(Span(style=f"height:{w['users'] / scale * 100:.1f}%"), cls="bar", tabindex="0",
-                            title=f"Week {label}: {n(w['users'])} users", aria_label=f"Week {label}: {n(w['users'])} users"))
-        else:
-            bars.append(Div(Span(), cls="bar gap", tabindex="0", title=f"Week {label}: fewer than {MIN_REPORTS} apps reported",
-                            aria_label=f"Week {label}: fewer than {MIN_REPORTS} apps reported"))
-    pos_labels = ("First tab", "Second tab", "Third tab", "Further along")
-    top_pos = max((s or {}).get("positions") or [0]) or 1
-    tiles = [Div(Div("Downloads", cls="label"), Div(n(f["downloads"]), cls="value"),
-                 Div(f"{n(f['downloads_week'])} this week", cls="sub"), cls="tile")]
+    paras, parts = explain(f["source"])
+    usage = None
     if s:
+        weeks = store.weekly(slug, 12)
+        top = max([w["users"] for w in weeks if w["shown"]] + [1])
+        scale = max(10, int(top * 1.15))
+        bars = []
+        for w in weeks:
+            label = w["week"].split("-W")[1]
+            if w["shown"]:
+                bars.append(Div(Span(style=f"height:{w['users'] / scale * 100:.1f}%"), cls="bar", tabindex="0",
+                                title=f"Week {label}: {n(w['users'])} users",
+                                aria_label=f"Week {label}: {n(w['users'])} users"))
+            else:
+                bars.append(Div(Span(), cls="bar gap", tabindex="0", title=f"Week {label}: fewer than {MIN_REPORTS} apps reported",
+                                aria_label=f"Week {label}: fewer than {MIN_REPORTS} apps reported"))
         ch = s["users_change"]
-        tiles += [
+        pos_labels = ("First tab", "Second tab", "Third tab", "Further along")
+        top_pos = max(s.get("positions") or [0]) or 1
+        tiles = [
             Div(Div("Weekly users", cls="label"), Div(n(s["users"]), cls="value"),
                 Div(f"{'▲' if ch >= 0 else '▼'} {abs(ch) * 100:.0f}% on the week before", cls="sub up" if ch >= 0 else "sub")
                 if ch is not None else Div(f"week {s['week'].split('-W')[1]}", cls="sub"), cls="tile"),
@@ -398,91 +506,96 @@ def get(slug: str, session):
             Div(Div("Posts read per visit", cls="label"), Div(f"{s['read_per_visit']:.0f}", cls="value"),
                 Div("on average", cls="sub"), cls="tile"),
             Div(Div("Liked or replied to", cls="label"), Div(pct(s["acted_share"]), cls="value"),
-                Div("of posts read", cls="sub"), cls="tile")]
+                Div("of posts read", cls="sub"), cls="tile"),
+            Div(Div("Downloads", cls="label"), Div(n(f["downloads"]), cls="value"),
+                Div(f"{n(f['downloads_week'])} this week", cls="sub"), cls="tile")]
+        usage = Section(
+            H2("How people use it"), Div(*tiles, cls="tiles"),
+            P("Apps that shared stats and opened this feed at least once that week. Last 12 weeks; a dashed mark means "
+              f"fewer than {MIN_REPORTS} apps reported.", cls="muted small"),
+            Div(Div(Span(n(scale)), cls="grid", style="top:0"), Div(Span(n(scale // 2)), cls="grid", style="top:50%"),
+                *bars, cls="chart", role="group", aria_label="Weekly users, last 12 weeks"),
+            Div(*[Span(w["week"].split("-W")[1]) for w in weeks], cls="chart-x", aria_hidden="true"),
+            H3("Where people put it", style="margin-top:24px"),
+            Div(*[Div(Span(lbl), Div(Span(style=f"width:{v / top_pos * 100:.0f}%"), cls="track"), Span(pct(v), cls="v"),
+                      cls="hbar") for lbl, v in zip(pos_labels, s["positions"])], cls="hbars"), cls="block")
+    if s:
+        numbers = P(f"Figures from {n(s['reports'])} apps that chose to share anonymous counts for week "
+                    f"{s['week'].split('-W')[1]}. People who said no aren't counted, so real use is higher. ",
+                    A("How the numbers work", href="/privacy#stats"))
     else:
-        tiles.append(Div(Div("Weekly figures", cls="label"), Div("Too new", cls="value"),
-                         Div(f"shown once {MIN_REPORTS}+ apps report", cls="sub"), cls="tile"))
+        numbers = P(f"{n(f['downloads'])} download{'s' if f['downloads'] != 1 else ''} so far. Weekly figures appear once "
+                    f"{MIN_REPORTS} apps share anonymous stats. ", A("How the numbers work", href="/privacy#stats"))
     versions = store.versions(slug)
     return layout(f["name"], Div(
         P(A("← All feeds", href="/feeds"), cls="small"),
-        Div(P("Community feed", cls="kicker"), H1(f["name"]), P(f["description"], cls="italic"),
-            P(Span(f"by {f['credit']}" if f["credit"] else "Shared anonymously"), " · ",
-              Span(f"Version {f['version']} · updated {day(f['updated_at'])}"), " · ", Span("✓ Reviewed by a maintainer", cls="reviewed"),
-              cls="muted small"),
-            Div(A("Read the code", href="#code", cls="button"), Span("To add it, open Broadsheet: Feeds › Community.",
-                                                                       cls="muted small"), cls="row")),
-        Div(*tiles, cls="tiles"),
-        Section(H2("Weekly users"),
-                P("Apps that shared stats and opened this feed at least once that week. Last 12 weeks; a dashed mark means "
-                  f"fewer than {MIN_REPORTS} apps reported.", cls="muted small"),
-                Div(Div(Span(n(scale)), cls="grid", style="top:0"), Div(Span(n(scale // 2)), cls="grid", style="top:50%"),
-                    *bars, cls="chart", role="group", aria_label="Weekly users, last 12 weeks"),
-                Div(*[Span(w["week"].split("-W")[1]) for w in weeks], cls="chart-x", aria_hidden="true"), cls="block"),
-        Section(H2("Where people put it"), P("Its position among each app's Home tabs, this week.", cls="muted small"),
-                Div(*[Div(Span(lbl), Div(Span(style=f"width:{v / top_pos * 100:.0f}%"), cls="track"), Span(pct(v), cls="v"),
-                          cls="hbar") for lbl, v in zip(pos_labels, s["positions"])], cls="hbars")
-                if s else P("Not enough reports yet.", cls="muted"), cls="block"),
-        Section(Div(H2("The code"), Span(f"{len(f['source'].splitlines())} lines · reads ", *[Code(x) for x in f["sources"]],
-                                         cls="muted small"), cls="row", style="justify-content:space-between"),
-                Pre(Code(f["source"])), id="code", cls="block"),
-        cls="content"),
-        Div(Section(H3("Where these numbers come from"),
-                    P("Downloads count every time an app fetches this feed, with nothing kept about who. "
-                      + (f"The other figures come from {n(s['reports'])} apps that chose to share anonymous counts for "
-                         f"week {s['week'].split('-W')[1]}. None of them sent a handle, a post or an account." if s else
-                         "Weekly figures appear once enough apps share anonymous counts.")),
-                    P("People who said no to stats aren't in those figures, so real use is higher.", cls="muted small")),
+        P("Community feed", cls="kicker"), H1(f["name"]),
+        P(Span(f"by {f['credit']}" if f["credit"] else "Shared anonymously"),
+          f" · version {f['version']} · updated {day(f['updated_at'])} · reads ",
+          ", ".join(source_label(x) for x in f["sources"]), cls="muted small"),
+        Div(*[P(p) for p in (paras or [f["description"]])], cls="explain"),
+        Section(H2("What it rewards"), Ul(*[Li(p[:1].upper() + p[1:]) for p in parts], cls="rewards"),
+                P("A post's score is these added together.", cls="muted small"), cls="block") if parts else None,
+        Details(Summary(Strong("Read the code"), Span(f" · {len(f['source'].splitlines())} lines of Python", cls="muted")),
+                Pre(Code(f["source"])), id="code", cls="code-fold"),
+        usage, cls="content"),
+        Div(Section(A("Open in your browser", href=try_link(slug), cls="button primary large"),
+                    P("Opens Broadsheet in this browser on this feed, where you can add it. Nothing to install.",
+                      cls="muted small"),
+                    P("Have the app? Go to ", Strong(f"Feeds › Community › {f['name']}"), ".", cls="small have-app"),
+                    cls="add-box"),
             Section(H3("Checks"), Ul(Li(Span("✓", cls="yes"), "No network or file access"),
                                      Li(Span("✓", cls="yes"), "Only Broadsheet's feed helpers and the standard maths tools"),
                                      Li(Span("✓", cls="yes"), "Read by a maintainer before listing"), cls="checks")),
+            Section(H3("Use"), numbers, cls="quiet"),
             Section(H3("Versions"), Ol(*[Li(Strong(str(v["version"])), f" · {day(v['created_at'])} · ",
                                            Span(v["note"] or "Update", cls="muted")) for v in versions],
                                        cls="checks", style="list-style:none;padding:0")),
             cls="side"), active="/feeds", session=session)
 
 
-@rt("/data")
+@rt("/privacy")
 def get(session):
     example = {"week": "2026-W44", "feeds": [
         {"feed": "slow-news", "on_home": True, "installed_for": "8-30d", "visits": 9, "posts_read": 171,
          "posts_liked_or_replied": 6, "tab_position": 2}]}
-    return layout("How the numbers work", Div(
-        P("Privacy", cls="kicker"), H1("How the numbers work"),
-        P("Broadsheet is local-first: your accounts, posts and the feeds you write stay on your device. This site only "
-          "knows what's below.", cls="dek"),
+    return layout("Privacy", Div(
+        P("Privacy", cls="kicker"), H1("Where your data goes"),
+        P("Broadsheet is local-first. Your accounts, posts and the feeds you write stay on your device, and this site "
+          "only knows what's on this page.", cls="dek"),
+        Section(H2("What stays with you"),
+                Ul(Li(Strong("The apps"), " keep your accounts, feeds and database in your own user data folder on "
+                      "Windows and Mac, and in the app's private storage on Android."),
+                   Li(Strong("The browser version"), " keeps them in that browser's storage for this site. This site only "
+                      "hands out its files. Clearing the site's data signs it out, so keep a backup from its Settings."),
+                   Li("Sign-ins go straight from your device to Bluesky, Mastodon or X. Your posts are fetched from them "
+                      "directly, never through us."), cls="plain-list"), cls="block"),
         Section(H2("Downloads"), P("When an app adds a feed, it fetches the file from this site and the count for that feed "
-                                   "and day goes up by one. Nothing else about the request is stored.")),
+                                   "and day goes up by one. Nothing else about the request is stored. App downloads aren't "
+                                   "tied to anyone either, and the site keeps no request logs."), cls="block"),
         Section(H2("Anonymous weekly stats"),
                 P("The first time someone adds a community feed, the app asks whether to share anonymous counts, with neither "
-                  "answer picked. If they say yes, once a week the app sends one report like this, only for feeds that came "
-                  "from this directory:"),
+                  "answer picked. They can change their mind in Settings. If they say yes, once a week the app sends one "
+                  "report like this, only for feeds that came from this directory:"),
                 Pre(Code(json.dumps(example, indent=2))),
                 P("The site adds each report to that feed's weekly totals and throws the report away. There's no device ID, "
                   "so reports can't be linked to each other, and IP addresses aren't kept."),
-                P(f"A weekly figure is only shown once {MIN_REPORTS} or more apps have reported it."), cls="block"),
+                P(f"A weekly figure is only shown once {MIN_REPORTS} or more apps have reported it."), cls="block", id="stats"),
         Section(H2("Shared feeds"), P("When you share a feed, the app sends the file, its name and description, and the "
                                       "credit line if you gave one. It never sends your handle or accounts. The app makes a "
                                       "private receipt so it can check on the review; the site keeps only a fingerprint "
                                       "of it."), cls="block"),
-        cls="content"), Div(numbers_box(), cls="side"), active="/data", session=session)
+        cls="content"), Div(numbers_box(), cls="side"), active="/privacy", session=session)
+
+
+@rt("/data")
+def get():
+    return RedirectResponse("/privacy", status_code=301)
 
 
 @rt("/write")
-def get(session):
-    return layout("Write a feed", Div(
-        P("For authors", cls="kicker"), H1("Write and share a feed"),
-        P("A feed is a Python file with a name, the timelines it reads, and a score() function that ranks posts.", cls="dek"),
-        Ol(Li("In Broadsheet, open Feeds and choose New feed, or copy one you like."),
-           Li("Save it and use it for a while. Preview shows the top posts and why each one ranked."),
-           Li("When you're happy, choose Share with the community. The app checks for anything personal first, such as "
-              "one of your lists."),
-           Li("A maintainer reads the code, usually within a few days. Follow it under Feeds › Your submissions."),
-           Li("Once listed, it appears here and in everyone's Community tab. Updates go through the same review.")),
-        Section(H2("What shared feeds can use"),
-                P("Only ", Code("crossposter.feeds"), " and standard tools like ", Code("math"), ", ", Code("collections"),
-                  " and ", Code("re"), ". No network, files, ", Code("eval"), " or ", Code("exec"),
-                  ". Feeds only see posts already fetched into your timelines."), cls="block"),
-        cls="content"), Div(numbers_box(), cls="side"), active="/write", session=session)
+def get():
+    return RedirectResponse("/feeds/share", status_code=301)
 
 
 # ---------- review queue (maintainers) ----------

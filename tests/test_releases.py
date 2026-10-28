@@ -44,7 +44,7 @@ def upload(c, sha=SHA, **over):
 def test_publish_and_download(site):
     c, r = site
     assert c.get("/downloads/Broadsheet-android.apk").status_code == 404
-    assert "Coming soon" in c.get("/").text
+    assert "Coming soon" in c.get("/download").text
     upload(c)
     assert c.get("/desktop/manifest.json").status_code == 404          # nothing is live until it's published
     assert c.post(f"/api/releases/{SHA}/publish", headers=token()).json()["build"] == 123
@@ -54,6 +54,7 @@ def test_publish_and_download(site):
     assert c.get("/desktop/manifest.json").json()["build"] == 123
     assert c.get("/api/releases").json()["commit"] == SHA
     assert "/downloads/Broadsheet-windows.zip" in c.get("/").text
+    assert "/downloads/Broadsheet-android.apk" in c.get("/download").text
     assert c.get("/downloads/manifest.json").status_code == 404
 
     # The next release replaces it, and the old files go.
