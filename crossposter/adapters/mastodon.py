@@ -172,6 +172,7 @@ def to_post(s: dict, account_id: str, host: str) -> Post:
         card=LinkCard(url=card["url"], title=card.get("title") or "", description=card.get("description") or "",
                       image=card.get("image") or "") if card else None,
         quote=quote, is_reply=bool(s.get("in_reply_to_id")), reply_to_handle=reply_handle,
+        reply_to_id=str(s.get("in_reply_to_id") or ""),
         likes=s.get("favourites_count") or 0, reposts=s.get("reblogs_count") or 0,
         replies=s.get("replies_count") or 0, quotes=s.get("quotes_count") or 0,
         liked=bool(s.get("favourited")), reposted=bool(s.get("reblogged")),
@@ -278,6 +279,9 @@ class MastodonAdapter(NetworkAdapter):
         ctx = (await self._get(f"/api/v1/statuses/{post_id}/context")).json()
         conv = lambda x: to_post(x, self.account_id, self.host)
         return [conv(x) for x in ctx.get("ancestors", [])], conv(s), [conv(x) for x in ctx.get("descendants", [])]
+
+    async def get_post(self, post_id: str) -> Post:
+        return to_post((await self._get(f"/api/v1/statuses/{post_id}")).json(), self.account_id, self.host)
 
     async def _lookup(self, handle: str) -> dict:
         handle = handle.lstrip("@")

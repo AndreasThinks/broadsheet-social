@@ -112,9 +112,11 @@ def to_post(pv: dict, account_id: str, reason: dict | None = None, reply: dict |
     sensitive = sorted(labels & SENSITIVE_LABELS)
     viewer = pv.get("viewer") or {}
     rep = record.get("reply") or {}
-    reply_handle = ""
+    reply_handle, parent = "", None
     if reply and isinstance(reply.get("parent"), dict):
         reply_handle = ((reply["parent"].get("author") or {}).get("handle")) or ""
+        if reply["parent"].get("uri") and "record" in reply["parent"]:
+            parent = to_post(reply["parent"], account_id)
     langs = record.get("langs") or []
     return Post(
         network="bluesky", id=pv["uri"], account_id=account_id, author=author,
@@ -122,7 +124,8 @@ def to_post(pv: dict, account_id: str, reason: dict | None = None, reply: dict |
         text=bsky_segments(record.get("text", ""), record.get("facets")),
         url=f"https://bsky.app/profile/{author.handle}/post/{rkey(pv['uri'])}", media=media, card=card, quote=quote,
         reposted_by=to_account(reason["by"]) if reason and reason.get("$type", "").endswith("reasonRepost") else None,
-        is_reply=bool(rep), reply_to_handle=reply_handle,
+        is_reply=bool(rep), reply_to_handle=reply_handle, reply_to_id=(rep.get("parent") or {}).get("uri", ""),
+        parent=parent,
         likes=pv.get("likeCount") or 0, reposts=pv.get("repostCount") or 0,
         replies=pv.get("replyCount") or 0, quotes=pv.get("quoteCount") or 0,
         liked=bool(viewer.get("like")), reposted=bool(viewer.get("repost")),
@@ -269,6 +272,12 @@ class BlueskyAdapter(NetworkAdapter):
                     walk(child)
         walk(node)
         return ancestors, to_post(node["post"], self.account_id), replies
+
+    async def get_post(self, post_id: str) -> Post:
+        posts = (await self._get("app.bsky.feed.getPosts", uris=post_id)).get("posts") or []
+        if not posts:
+            raise NetworkError("That post was deleted or isn't visible.")
+        return to_post(posts[0], self.account_id)
 
     async def profile(self, handle: str) -> Account:
         return to_account(await self._get("app.bsky.actor.getProfile", actor=handle.lstrip("@")))

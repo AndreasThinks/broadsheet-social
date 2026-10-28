@@ -28,8 +28,8 @@ from .crypto import app_secret
 from .db import DB
 from .models import Notification
 from .richtext import length_for
-from .ui import (NETWORK_LABELS, safe, account_chip, avatar, badge, error_box, icon, load_more, notification_row, page, post_card,
-                 profile_url)
+from .ui import (NETWORK_LABELS, safe, account_chip, avatar, badge, conversation, error_box, icon, load_more,
+                 notification_row, page, parent_peek, post_card, profile_url, replying_to, thread_url)
 
 log = logging.getLogger("crossposter")
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
@@ -305,17 +305,35 @@ async def get(key: str):
     account_id, post_id = split_key(key)
     a = registry.account(db, account_id)
     if not a:
-        return shell("Thread", error_box("That account isn't connected any more."))
+        return shell("Conversation", error_box("That account isn't connected any more."))
     try:
         ancestors, post, replies = await a.thread(post_id)
     except NetworkError as e:
-        return shell("Thread", error_box(str(e)))
+        return shell("Conversation", error_box(str(e)))
     cache.save_posts(db, ancestors + [post] + replies)
-    return shell("Thread", H2("Thread", cls="page-title"),
-                 Div(*[post_card(p) for p in ancestors], cls="ancestors"),
-                 post_card(post, focus=True),
-                 A("Reply", href=f"/compose?reply={quote(post.key)}", cls="button primary reply-btn"),
-                 Div(*[post_card(p) for p in replies], cls="replies"))
+    return shell("Conversation", H2("Conversation", cls="page-title"),
+                 conversation(ancestors, post, replies,
+                              A("Reply", href=f"/compose?reply={quote(post.key)}", cls="button primary reply-btn")))
+
+
+@rt("/peek")
+async def get(key: str, child: str):
+    """The post a reply answers, shown above the reply in a feed. Falls back to "Replying to @someone"."""
+    reply = cache.get_post(db, child)
+    parent = cache.get_post(db, key)
+    if not parent:
+        account_id, post_id = split_key(key)
+        a = registry.account(db, account_id)
+        try:
+            if not a:
+                raise NetworkError("account gone")
+            parent = await a.get_post(post_id)
+            cache.save_posts(db, [parent])
+        except Exception as e:  # a preview is a nicety: never break the feed over it
+            log.info("parent preview for %s failed: %s", key, e)
+    if parent and reply:
+        return parent_peek(parent, thread_url(reply))
+    return (replying_to(reply) if reply else None) or Span()
 
 
 @rt("/profile/{network}/{handle:path}")

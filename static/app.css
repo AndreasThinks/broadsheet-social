@@ -190,7 +190,39 @@ label > input, label > textarea { margin-top: 4px; font-weight: 400; }
 .htmx-indicator { display: none; } .htmx-request .htmx-indicator, .htmx-request.htmx-indicator { display: inline-block; }
 @keyframes spin { to { transform: rotate(360deg); } }
 .reply-btn { margin: 0 0 12px; }
-.ancestors .post { opacity: .92; }
+
+/* conversations: a reply in a feed shows what it answers; the conversation page nests replies under what they answer */
+.post[data-href] { cursor: pointer; }
+.post[data-href] .text { cursor: auto; }
+.peek { display: grid; grid-template-columns: 32px 1fr; gap: 0 10px; margin: -6px 0 0; color: var(--muted); }
+.peek:hover { text-decoration: none; }
+.peek:hover .peek-text { color: var(--text); }
+.peek-rail { display: flex; flex-direction: column; align-items: center; padding-top: 2px; }
+.peek-line { flex: 1; width: 2px; min-height: 10px; background: var(--line); margin-top: 4px; }
+.peek-body { min-width: 0; padding-bottom: 10px; }
+.peek-who { font-size: .85rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.peek-who strong { color: var(--text); font-weight: 600; }
+.peek-text { font-family: var(--serif); font-size: 1.02rem; line-height: 1.4; display: -webkit-box; -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical; overflow: hidden; overflow-wrap: anywhere; }
+.convo-link { display: flex; justify-content: space-between; align-items: center; margin: 8px 0 2px; padding: 8px 12px;
+  background: var(--accent-soft); border-radius: var(--radius); font-size: .88rem; font-weight: 500; }
+.convo-link:hover { text-decoration: none; }
+.name-row { display: flex; align-items: center; gap: 6px; min-width: 0; }
+.op { flex: none; font: 600 .66rem/1 var(--sans); letter-spacing: .06em; text-transform: uppercase; color: var(--muted);
+  border: 1px solid var(--line); border-radius: 3px; padding: 3px 5px; }
+.chain .post { border-bottom: 0; position: relative; padding-bottom: 2px; }
+.chain .post::before { content: ""; position: absolute; left: 15px; top: 60px; bottom: -16px; width: 2px; background: var(--line); }
+.chain .post > :not(header) { margin-left: 42px; }
+.conversation > .post.focus { margin-top: 16px; }
+.thread-sep { font: 600 .75rem/1 var(--sans); letter-spacing: .08em; text-transform: uppercase; color: var(--muted);
+  border-top: 1px solid var(--rule); padding-top: 12px; margin: 8px 0 0; }
+.branch { border-left: 2px solid var(--line); margin-left: 15px; padding-left: 16px; }
+.branch .post:last-child, .branch .fold .post:last-child { border-bottom: 0; }
+.fold-btn { list-style: none; cursor: pointer; color: var(--accent); font-size: .88rem; font-weight: 500; padding: 10px 0; }
+.fold-btn::-webkit-details-marker { display: none; }
+.fold[open] > .fold-btn { display: none; }
+@media (max-width: 760px) { .branch { margin-left: 6px; padding-left: 10px; } .chain .post > :not(header) { margin-left: 0; }
+  .chain .post::before { display: none; } }
 
 /* compose: a quiet page to write on, mentions explained as footnotes underneath */
 .compose textarea[name=text] { font-family: var(--serif); font-size: 1.4rem; line-height: 1.45; border: 0; padding: 4px 0;

@@ -115,6 +115,10 @@ class NetworkAdapter(ABC):
     @abstractmethod
     async def thread(self, post_id: str) -> tuple[list[Post], Post, list[Post]]: ...
 
+    async def get_post(self, post_id: str) -> Post:
+        """One post by id, for the "replying to" preview. Optional."""
+        raise NetworkError(f"{self.label} can't fetch single posts here.")
+
     @abstractmethod
     async def profile(self, handle: str) -> Account: ...
 

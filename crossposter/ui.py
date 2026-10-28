@@ -163,13 +163,41 @@ def why(terms: dict[str, float], total: float):
                    cls="why")
 
 
-def post_card(post: Post, score: tuple[float, dict] | None = None, focus: bool = False):
+def parent_peek(parent: Post, href: str):
+    """The post a reply answers, as a faded two-line preview joined to the reply by a thin line."""
+    return A(Div(avatar(parent.author, "xs"), Span(cls="peek-line"), cls="peek-rail"),
+             Div(Div(Strong(parent.author.name), " ", Span(parent.author.at_handle, cls="handle"), cls="peek-who"),
+                 Div(parent.plain_text.strip() or "(no text)", cls="peek-text"), cls="peek-body"),
+             href=href, cls="peek")
+
+
+def replying_to(post: Post):
+    if not post.reply_to_handle:
+        return None
+    return Div("Replying to ", A("@" + post.reply_to_handle,
+                                 href=profile_url(post.network, post.reply_to_handle, post.account_id)), cls="context")
+
+
+def reply_context(post: Post):
+    """Above a reply in a feed: the parent itself if we have it, otherwise fetch it once the reply scrolls into view."""
+    if post.parent:
+        return parent_peek(post.parent, thread_url(post))
+    if post.reply_to_id and post.network in ("bluesky", "mastodon"):
+        q = urlencode({"key": f"{post.account_id}|{post.reply_to_id}", "child": post.key})
+        return Div(replying_to(post), hx_get=f"/peek?{q}", hx_trigger="revealed", hx_swap="outerHTML", cls="peek-wait")
+    return replying_to(post)
+
+
+def post_card(post: Post, score: tuple[float, dict] | None = None, focus: bool = False, in_thread: bool = False,
+              op: bool = False):
     a = post.author
     nets = [post.network] + [o["network"] for o in post.also_on]
     on = " and ".join(NETWORK_LABELS.get(n, n) for n in dict.fromkeys(nets))
     head = Header(
         A(avatar(a, "sm"), href=profile_url(a.network, a.handle, post.account_id), cls="avatar-link"),
-        Div(A(Strong(a.name), href=profile_url(a.network, a.handle, post.account_id), cls="name"),
+        Div(Div(A(Strong(a.name), href=profile_url(a.network, a.handle, post.account_id), cls="name"),
+                Span("Started it", cls="op", title="Wrote the first post in this conversation") if op else None,
+                cls="name-row"),
             Div(Span(a.at_handle, cls="handle"), f" · on {on} · ",
                 A(ago(post.created_at), href=thread_url(post), cls="time",
                   title=datetime.fromtimestamp(post.created_at).strftime("%d %b %Y %H:%M")), cls="byline"),
@@ -181,15 +209,82 @@ def post_card(post: Post, score: tuple[float, dict] | None = None, focus: bool =
         who = post.reposted_by.name if post.reposted_by else boosted[0]
         more = len(set(boosted)) - 1 if boosted else 0
         lines.append(Div(icon("repost", "icon sm"), f" {who} reposted" + (f" (+{more})" if more > 0 else ""), cls="context"))
-    if post.reply_to_handle:
-        lines.append(Div("Replying to ", A("@" + post.reply_to_handle,
-                                            href=profile_url(post.network, post.reply_to_handle, post.account_id)),
-                         cls="context"))
+    if post.is_reply and not in_thread and not focus:
+        lines.append(reply_context(post))
+    elif post.reply_to_handle and not in_thread and not focus:
+        lines.append(replying_to(post))
     body = [rich_text(post.text, post.network, post.account_id), media_grid(post), link_card(post), quote_card(post)]
     if post.content_warning or post.sensitive:
         body = [Details(Summary(post.content_warning or "Sensitive content", cls="cw"), *body)]
-    return Article(*lines, head, *body, action_bar(post), cls="post" + (" focus" if focus else ""),
-                   id="p-" + str(abs(hash(post.key))))
+    convo = None
+    if not in_thread and not focus and post.is_reply:
+        label = "Show conversation" + (f" · {post.replies} repl{'y' if post.replies == 1 else 'ies'}" if post.replies else "")
+        convo = A(label, Span("›", aria_hidden="true"), href=thread_url(post), cls="convo-link")
+    return Article(*lines, head, *body, convo, action_bar(post),
+                   cls="post" + (" focus" if focus else "") + (" in-thread" if in_thread else ""),
+                   data_href=None if focus else thread_url(post), id="p-" + str(abs(hash(post.key))))
+
+
+THREAD_DEPTH = 3       # deeper replies are listed flat under the third level
+SHOW_TOP_REPLIES = 20  # direct replies shown before folding the rest
+SHOW_SUB_REPLIES = 2   # replies shown under each reply before folding the rest
+
+
+def conversation(ancestors: list[Post], post: Post, replies: list[Post], reply_button=None):
+    """A conversation read top to bottom: what led up to the post, the post, then replies nested under what they answer."""
+    root = (ancestors[0] if ancestors else post).author.handle
+    ids = {r.id for r in replies}
+    kids: dict[str, list[Post]] = {}
+    for r in replies:
+        pid = r.reply_to_id if r.reply_to_id in ids and r.reply_to_id != r.id else post.id
+        kids.setdefault(pid, []).append(r)
+    seen: set[str] = set()
+
+    def card(p: Post):
+        seen.add(p.id)
+        return post_card(p, in_thread=True, op=p.author.handle == root and p is not (ancestors[0] if ancestors else post))
+
+    def descendants(pid: str) -> list[Post]:
+        out = []
+        for k in kids.get(pid, []):
+            if k.id not in seen and k not in out:
+                out.append(k)
+                out.extend(d for d in descendants(k.id) if d not in out)
+        return out
+
+    def level(pid: str, depth: int, show: int) -> tuple[list, int]:
+        """The replies to pid as components, and how many posts they hold in total."""
+        units, sizes = [], []
+        for k in kids.get(pid, []):
+            if k.id in seen:
+                continue
+            if depth >= THREAD_DEPTH:
+                flat = [card(k)] + [card(d) for d in descendants(k.id)]
+                units.append(Div(*flat, cls="reply-unit"))
+                sizes.append(len(flat))
+            else:
+                first = card(k)
+                sub, n = level(k.id, depth + 1, SHOW_SUB_REPLIES)
+                units.append(Div(first, Div(*sub, cls="branch") if sub else None, cls="reply-unit"))
+                sizes.append(1 + n)
+        total = sum(sizes)
+        if len(units) > show:
+            hidden = sum(sizes[show:])
+            units = units[:show] + [Details(Summary(f"Show {hidden} more repl{'y' if hidden == 1 else 'ies'}",
+                                                    cls="fold-btn"), *units[show:], cls="fold")]
+        return units, total
+
+    focus = post_card(post, focus=True)
+    top, _ = level(post.id, 1, SHOW_TOP_REPLIES)
+    n = len(replies)
+    if n:
+        sep = Div(f"{n} repl{'y' if n == 1 else 'ies'}", cls="thread-sep")
+    elif post.network == "x":
+        sep = Div(A("See replies on X", href=safe(post.url), target="_blank", rel="noopener"), cls="thread-sep")
+    else:
+        sep = Div("No replies yet", cls="thread-sep")
+    return Div(Div(*[card(p) for p in ancestors], cls="chain") if ancestors else None,
+               focus, reply_button, sep, Div(*top, cls="replies"), cls="conversation")
 
 
 def load_more(url: str | None):

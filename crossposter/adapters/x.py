@@ -28,9 +28,10 @@ from .base import AccountRecord, NetworkAdapter, NetworkError, PostResult, Uploa
 API = "https://api.x.com"
 SCOPES = "tweet.read tweet.write users.read like.write media.write offline.access"
 PRICES = {"post_reads": 0.005, "user_reads": 0.010, "posts": 0.015, "link_posts": 0.200}
-TWEET_FIELDS = "created_at,public_metrics,entities,attachments,in_reply_to_user_id,lang,possibly_sensitive,conversation_id"
+TWEET_FIELDS = "created_at,public_metrics,entities,attachments,in_reply_to_user_id,lang,possibly_sensitive,conversation_id,referenced_tweets"
 EXPANSIONS = "author_id,attachments.media_keys"
 USER_FIELDS = "profile_image_url,username,name"
+MAX_THREAD_PARENTS = 3
 MEDIA_FIELDS = "url,preview_image_url,alt_text,width,height,type,variants"
 
 HANDOFF_ID = "x-handoff"
@@ -206,10 +207,11 @@ def _parse(data: dict, account_id: str) -> list[Post]:
                                 url=variants[-1]["url"] if variants else "", thumb=m.get("preview_image_url", ""),
                                 alt=m.get("alt_text") or ""))
         pm = t.get("public_metrics") or {}
+        parent_id = next((r.get("id", "") for r in t.get("referenced_tweets") or [] if r.get("type") == "replied_to"), "")
         out.append(Post(network="x", id=t["id"], account_id=account_id, author=author,
                         created_at=parse_time(t.get("created_at")), text=x_segments(t.get("text", ""), t.get("entities")),
                         url=f"https://x.com/{author.handle}/status/{t['id']}", media=ms,
-                        is_reply=bool(t.get("in_reply_to_user_id")), likes=pm.get("like_count", 0),
+                        is_reply=bool(t.get("in_reply_to_user_id")), reply_to_id=parent_id, likes=pm.get("like_count", 0),
                         reposts=pm.get("retweet_count", 0), replies=pm.get("reply_count", 0),
                         quotes=pm.get("quote_count", 0), sensitive=bool(t.get("possibly_sensitive")),
                         lang=t.get("lang", "")))
@@ -271,7 +273,18 @@ class XAdapter(NetworkAdapter):
         posts = _parse(data, self.account_id)
         if not posts:
             raise NetworkError("Post not found.")
-        return [], posts[0], []
+        # Each post above this one is another paid read, so only go a few steps up. Replies would need search.
+        ancestors, up = [], posts[0].reply_to_id
+        while up and len(ancestors) < MAX_THREAD_PARENTS:
+            try:
+                parent = _parse(await self._read("/2/tweets", 1, ids=up), self.account_id)
+            except NetworkError:
+                break
+            if not parent:
+                break
+            ancestors.insert(0, parent[0])
+            up = parent[0].reply_to_id
+        return ancestors, posts[0], []
 
     async def profile(self, handle: str) -> Account:
         if not reading_enabled(self.db):
