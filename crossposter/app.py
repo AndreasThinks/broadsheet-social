@@ -13,13 +13,13 @@ from dataclasses import dataclass
 from pathlib import Path
 from urllib.parse import quote, urlencode
 
-from fasthtml.common import (A, Beforeware, Button, Code, Details, Div, Form, H1, H2, H3, Hidden, Input, Label, Li,
+from fasthtml.common import (A, Beforeware, Blockquote, Button, Code, Details, Div, Fieldset, Form, Legend, H1, H2, H3, Hidden, Input, Label, Li,
                              Link, Meta, Ol, Option, P, Pre, Script, Section, Select, Small, Span, Strong, Summary, Textarea,
                              Ul, fast_app)
 from starlette.responses import FileResponse, JSONResponse, RedirectResponse, Response
 
 from . import adapters as registry
-from . import cache, feeds, people, push
+from . import cache, community, feedcheck, feeds, people, push
 from .adapters import NetworkError, Upload
 from .adapters import bluesky as bsky
 from .adapters import bluesky_oauth, mastodon, x as xapi
@@ -53,9 +53,10 @@ def seed_feeds() -> None:
 
 async def lifespan(app):
     seed_feeds()
-    task = asyncio.create_task(push.poller(db))
+    tasks = [asyncio.create_task(push.poller(db)), asyncio.create_task(community.stats_loop(db, tab_positions))]
     yield
-    task.cancel()
+    for task in tasks:
+        task.cancel()
 
 
 def auth_check(req, session):
@@ -280,6 +281,7 @@ async def get(feed: str = "", acct: str = "", custom: str = "", cursor: str = ""
             if not ranked:
                 return Div("Nothing here yet. The feed fills as posts are fetched in the background; check back in a minute.",
                            cls="empty")
+            community.record_shown(db, custom, [r.post.key for r in chunk], offset == 0)
             return (*[post_card(r.post, (r.score, r.terms)) for r in chunk], load_more(nxt))
         a = registry.account(db, acct)
         if not a:
@@ -395,6 +397,8 @@ async def _toggle(key: str, what: str):
         await (a.like(post, on) if what == "like" else a.repost(post, on))
     except NetworkError as e:
         return Div(action_bar(post), Small(str(e), cls="error-inline"))
+    if on:
+        community.record_action(db, key)
     if what == "like":
         post.liked, post.likes = on, max(0, post.likes + (1 if on else -1))
     else:
@@ -571,6 +575,8 @@ async def post(req):
     db.x("insert into cross_posts(created_at, text, results) values(?, ?, ?)", (time.time(), text, json.dumps(record)))
     feeds._results.clear()
     ok = all(not isinstance(r, Exception) for r in results)
+    if reply_key and ok:
+        community.record_action(db, reply_key)
     return Div(Strong("Posted." if ok else "Some posts failed."), Ul(*rows),
                Script("document.getElementById('compose-form').reset();document.getElementById('alt-fields').innerHTML='';"
                       "document.getElementById('mention-preview').innerHTML='';") if ok else None,
@@ -747,6 +753,8 @@ def feed_card(lf, hidden: bool = False):
             A("Edit", href=f"/feeds/{slug}/edit", cls="button small") if lf.path else None,
             A("Copy", href=f"/feeds/new/edit?{urlencode({'start': slug})}", cls="button small",
               title="Start a new feed from this one"),
+            A("Share", href=f"/feeds/{slug}/share", cls="button small", title="Share it in the community directory")
+            if lf.path and f else None,
             Form(Button("Show on Home" if hidden else "Hide from Home", cls="small"),
                  method="post", action=f"/feeds/{slug}/visibility"),
             Form(Button("Remove", cls="small danger"), method="post", action=f"/feeds/{slug}/remove",
@@ -778,11 +786,12 @@ async def get():
         native.append(Li(badge(a.network), " ", Strong(a.rec.handle), Ul(*[
             Li(A(f.name, href="/?" + urlencode({"feed": f.source, "acct": a.account_id})), " ", Code(f.source, cls="muted"))
             for f in fs])))
-    return shell("Feeds", H2("Your custom feeds", cls="page-title"),
+    return shell("Feeds", feeds_subnav("/feeds"), H2("Your custom feeds", cls="page-title"),
                  P("Custom feeds are Python files. Each one picks posts from the sources it lists and ranks them with a ",
                    Code("score()"), " function. Edit one here or in your editor; changes apply on save.", cls="muted"),
                  Div(A("New feed", href="/feeds/new/edit", cls="button primary"),
                      A("Arrange tabs", href="/feeds/arrange", cls="button", title="Put your Home tabs in the order you want"),
+                     A("Browse community feeds", href="/feeds/community", cls="button"),
                      cls="row"), *cards,
                  *([H2("Add more feeds", cls="page-title"),
                     P("Ready-made feeds that ship with the app. Adding one copies it into your feeds folder so you can edit it.",
@@ -933,7 +942,7 @@ async def get(slug: str, start: str = ""):
 async def post(slug: str, code: str):
     slug = _safe_slug(slug)
     settings.feeds_dir.mkdir(parents=True, exist_ok=True)
-    (settings.feeds_dir / f"{slug}.py").write_text(code.replace("\r\n", "\n"))
+    (settings.feeds_dir / f"{slug}.py").write_text(code.replace("\r\n", "\n"), encoding="utf-8")
     feeds._results.pop(slug, None)
     return RedirectResponse(f"/feeds#{slug}" if (feeds.get_feed(slug) or feeds.COMBINED).error else f"/?custom={slug}",
                             status_code=303)
@@ -958,6 +967,348 @@ async def post(code: str):
             return error_box(f"{type(e).__name__}: {e}")
     return (P(Strong(f"{len(ranked)} posts"), f" matched out of {len(posts)} candidates. Top ten:", cls="muted"),
             *[post_card(r.post, (r.score, r.terms)) for r in ranked[:10]])
+
+
+# ---------- community feeds ----------
+
+def feeds_subnav(active: str):
+    """Yours / Community / Your submissions, across the top of the Feeds pages."""
+    links = (("/feeds", "Yours"), ("/feeds/community", "Community"), ("/feeds/submissions", "Your submissions"),
+             ("/feeds/arrange", "Arrange tabs"))
+    return Div(*[A(label, href=h, cls="tab" + (" active" if h == active else ""), aria_current="page" if h == active else None)
+                 for h, label in links], cls="tabs feeds-subnav")
+
+
+def _stats_line(f: dict) -> str:
+    s = f.get("stats")
+    bits = [f"{f.get('downloads', 0):,} downloads"]
+    if s:
+        bits.append(f"{s['users']:,} weekly users")
+        bits.append(f"{s['long_term_share'] * 100:.0f}% use it 30+ days")
+    else:
+        bits.append("too new for stats")
+    return " · ".join(bits)
+
+
+def _nets(sources: list[str]) -> list[str]:
+    return list(dict.fromkeys(s.split(":", 1)[0] for s in sources))
+
+
+def stats_prompt_card():
+    """Shown above the Community list until you've answered the stats question."""
+    if community.choice(db) is not None:
+        return None
+    return Div(P(Strong("Help feed authors, anonymously?")),
+               P("You'll be asked the first time you add a community feed. Counts only, never handles or posts.", cls="muted"),
+               A("See what's sent", href="/settings/privacy"), cls="notice-card")
+
+
+@rt("/feeds/community")
+async def get(q: str = "", fresh: int = 0):
+    try:
+        remote = await community.list_feeds(fresh=bool(fresh))
+    except community.DirectoryError as e:
+        return shell("Community feeds", feeds_subnav("/feeds/community"), error_box(str(e)),
+                     P("Your own feeds keep working; this only affects browsing the directory.", cls="muted"), active="/feeds")
+    have = community.installed(db)
+    by_remote = {rec["remote"]: (local, rec) for local, rec in have.items() if (settings.feeds_dir / f"{local}.py").is_file()}
+    if q:
+        ql = q.lower()
+        remote = [f for f in remote if ql in (f["name"] + " " + f["description"] + " " + f["credit"]).lower()]
+    rows = []
+    for f in remote:
+        mine = by_remote.get(f["slug"])
+        same = None if mine else community.same_file_named(f)
+        if mine and mine[1].get("version", 1) < f["version"]:
+            action = A(f"Update to v{f['version']}", href=f"/feeds/community/{f['slug']}", cls="button small primary")
+        elif mine or same:
+            action = A("Open", href=f"/?custom={mine[0] if mine else same}", cls="button small")
+        else:
+            action = A("Get", href=f"/feeds/community/{f['slug']}", cls="button small primary")
+        rows.append(Li(Div(A(H3(f["name"]), href=f"/feeds/community/{f['slug']}", cls="plain"),
+                           Small(f"by {f['credit']}" if f["credit"] else "shared anonymously", " · ",
+                                 *[badge(n) for n in _nets(f["sources"])], cls="muted"),
+                           P(f["description"], cls="feed-desc"), Small(_stats_line(f), cls="muted"), cls="community-about"),
+                       Span(Small("✓ Added" if mine else "✓ You have this", cls="added") if mine or same else None, action,
+                            cls="community-action"),
+                       cls="community-row"))
+    return shell("Community feeds", feeds_subnav("/feeds/community"),
+                 H2("Community feeds", cls="page-title"),
+                 P("Feeds other people wrote and shared. Each runs on this device, on posts already in your timelines. "
+                   "Read the code before you add one.", cls="muted"),
+                 Form(Label("Search the directory", Input(type="search", name="q", value=q,
+                                                          placeholder="News, art, quiet people…")),
+                      Button("Search", cls="small"), method="get", action="/feeds/community", cls="row connect"),
+                 stats_prompt_card(),
+                 Ol(*rows, cls="community-list") if rows else P("Nothing matches that.", cls="muted"),
+                 P(A("Browse on the web", href=settings.directory_url, target="_blank", rel="noopener"), " · ",
+                   A("Refresh", href="/feeds/community?fresh=1"), cls="muted small"),
+                 active="/feeds")
+
+
+@rt("/feeds/community/{slug}")
+async def get(slug: str, error: str = ""):
+    try:
+        f = await community.get_feed(slug)
+    except community.DirectoryError as e:
+        return shell("Community feed", feeds_subnav("/feeds/community"), error_box(str(e)), active="/feeds")
+    local = community.local_for(db, slug)
+    rec = community.installed(db).get(local) if local else None
+    accts = accounts()
+    read_rows = []
+    for src in f["sources"]:
+        net = src.split(":", 1)[0]
+        mine = [a.rec.handle for a in accts if a.network == net]
+        if net == "x" and not xapi.reading_enabled(db):
+            mine = []
+        read_rows.append(Li(badge(net), " ", Code(src), " ",
+                            Span("from " + ", ".join(mine) if mine else "skipped: no account connected", cls="muted")))
+    s = f.get("stats")
+    check = feedcheck.check(f["source"])
+    if rec and rec.get("version", 1) < f["version"]:
+        button = f"Update to version {f['version']}"
+    elif rec:
+        button = None
+    else:
+        button = "Add to Home"
+    return shell(f["name"], feeds_subnav("/feeds/community"),
+                 error_box(error) if error else None,
+                 P(f"Community feed · version {f['version']}", cls="kicker"), H2(f["name"], cls="page-title"),
+                 P(f["description"], cls="feed-desc"),
+                 P(f"by {f['credit']}" if f["credit"] else "Shared anonymously", " · ", Span("✓ Reviewed", cls="ok-text"),
+                   " · ", A("Its page in the directory", href=community.page_url(slug), target="_blank", rel="noopener"),
+                   cls="muted small"),
+                 Section(H3("Runs on this device"),
+                         P("It ranks posts already in your timelines. It can't post, follow, go online or read your files."),
+                         Ul(*read_rows, cls="read-rows"), cls="panel"),
+                 Section(H3("How it's doing"),
+                         Div(Div(Strong(f"{f['downloads']:,}"), Small("downloads", cls="muted")),
+                             Div(Strong(f"{s['users']:,}"), Small("weekly users", cls="muted")) if s else None,
+                             Div(Strong(f"{s['long_term_share'] * 100:.0f}%"), Small("use it 30+ days", cls="muted")) if s else None,
+                             Div(Strong(f"{s['read_per_visit']:.0f}"), Small("posts read a visit", cls="muted")) if s else None,
+                             cls="mini-stats"),
+                         None if s else P("Too new for weekly figures.", cls="muted small"), cls="panel"),
+                 Section(H3("The code"), P(f"{len(f['source'].splitlines())} lines. "
+                                           + ("Passed the checks on this device." if check.ok else "Failed the checks on this device."),
+                                           cls="muted small"),
+                         Pre(Code(f["source"], cls="language-python")), cls="panel"),
+                 Div(Form(Button(button, cls="primary"), method="post", action=f"/feeds/community/{slug}/add") if button and check.ok
+                     else A("Open", href=f"/?custom={local}", cls="button primary") if local else None,
+                     A("Back", href="/feeds/community", cls="button"), cls="row sheet-actions"),
+                 P("Updates are shown to you like this before they're applied." if not rec else
+                   "Updating replaces your copy, including any edits you made.", cls="muted small"),
+                 active="/feeds")
+
+
+@rt("/feeds/community/{slug}/add")
+async def post(slug: str):
+    try:
+        local = await community.add(db, slug)
+    except community.DirectoryError as e:
+        return RedirectResponse(f"/feeds/community/{quote(slug)}?" + urlencode({"error": str(e)}), status_code=303)
+    feeds._results.pop(local, None)
+    nxt = f"/?custom={local}"
+    if community.choice(db) is None:
+        return RedirectResponse("/feeds/stats-question?" + urlencode({"next": nxt, "added": local}), status_code=303)
+    return RedirectResponse(nxt, status_code=303)
+
+
+STATS_EXPLAINER = ("Once a week, Broadsheet can send a few anonymous counts about the community feeds you use: whether "
+                   "they're on Home, how often you open them, how many posts you read. Never your handles, accounts or "
+                   "posts, never the feeds you wrote, and no ID that links one week to the next.")
+
+
+@rt("/feeds/stats-question")
+async def get(next: str = "/", added: str = "", error: str = ""):
+    lf = feeds.get_feed(added) if added else None
+    choices = [("yes", "Yes, share anonymous counts", "For community feeds only. Weekly."),
+               ("no", "No thanks", "Nothing is sent. Feeds work the same.")]
+    return shell("Anonymous stats",
+                 P(Span("✓ ", cls="ok-text"), f"{lf.feed.name} is on your Home", cls="ok-text") if lf and lf.feed else None,
+                 H2("Help feed authors see what works?", cls="page-title"),
+                 P(STATS_EXPLAINER, cls="lede"),
+                 error_box(error) if error else None,
+                 Form(Fieldset(Legend("Choose one to continue", cls="muted small"),
+                               *[Label(Input(type="radio", name="choice", value=v, required=True),
+                                       Span(Strong(t), Small(sub, cls="muted")), cls="choice") for v, t, sub in choices],
+                               cls="choices"),
+                      Hidden(name="next", value=next),
+                      A("See exactly what a report looks like", href="/settings/privacy", cls="small"),
+                      Div(Button("Done", cls="primary"), cls="row"),
+                      P("Asked once. Change it any time in Settings › Privacy.", cls="muted small"),
+                      method="post", action="/feeds/stats-question", cls="stack"),
+                 active="/feeds")
+
+
+@rt("/feeds/stats-question")
+async def post(choice: str = "", next: str = "/"):
+    if choice not in ("yes", "no"):
+        return RedirectResponse("/feeds/stats-question?" + urlencode({"next": next, "error": "Pick one of the two."}),
+                                status_code=303)
+    community.set_choice(db, choice)
+    return RedirectResponse(next if next.startswith("/") and not next.startswith("//") else "/", status_code=303)
+
+
+async def tab_positions() -> dict[str, int]:
+    """Each custom feed's place among the tabs shown on Home, counting from 1."""
+    visible = [t for t in await home_tabs() if t.visible]
+    return {t.key: i for i, t in enumerate(visible, 1) if t.lf is not None}
+
+
+@rt("/settings/privacy")
+async def get(ok: str = ""):
+    on = community.choice(db) == "yes"
+    report = community.build_report(db, community.week_of(), await tab_positions())
+    last = db.get(community.SENT)
+    status = ("On. Last week's report goes out early in the week, once." if on else
+              "Off. Nothing is counted or sent." if community.choice(db) == "no" else
+              "Not chosen yet. Nothing is counted or sent until you say yes.")
+    return shell("Privacy", H2("Privacy", cls="page-title"), Div(ok, cls="result ok") if ok else None,
+                 Section(H3("Share anonymous feed stats"),
+                         P(status, cls="muted"),
+                         P(STATS_EXPLAINER),
+                         Form(Button("Turn off" if on else "Turn on", cls="primary" if not on else ""),
+                              Hidden(name="choice", value="no" if on else "yes"), method="post", action="/settings/privacy"),
+                         cls="panel"),
+                 Section(H3("This week's report so far, exactly"),
+                         P("Not sent: this is a preview." if not on else "This is what will be sent for this week.", cls="muted small"),
+                         Pre(Code(json.dumps(report, indent=2))),
+                         Div(Div(Strong("Sent"), Ul(Li("Counts for feeds from the community directory"),
+                                                    Li("How long you've had each one, in rough bands"))),
+                             Div(Strong("Never sent"), Ul(Li("Handles or accounts"), Li("Posts, follows, lists"),
+                                                          Li("Feeds you wrote"), Li("Any lasting ID"))), cls="two-col"),
+                         P("The directory doesn't keep IP addresses and adds each report to weekly totals before throwing it "
+                           "away. A figure only appears once 10 or more apps report it. Turning this off stops future "
+                           "reports and clears what's been counted. Past reports can't be linked to you, so there's nothing "
+                           "else to delete.", cls="muted small"),
+                         Details(Summary("Last report sent"), Pre(Code(json.dumps(last["report"], indent=2)))) if last else None,
+                         cls="panel"),
+                 P(A("See the public dashboard", href=settings.directory_url, target="_blank", rel="noopener")),
+                 active="/settings")
+
+
+@rt("/settings/privacy")
+async def post(choice: str = ""):
+    community.set_choice(db, choice)
+    return RedirectResponse("/settings/privacy?" + urlencode(
+        {"ok": "Anonymous stats are on." if choice == "yes" else "Anonymous stats are off."}), status_code=303)
+
+
+@rt("/feeds/{slug}/share")
+async def get(slug: str, error: str = ""):
+    lf = feeds.get_feed(slug)
+    if not lf or not lf.path or not lf.feed:
+        return RedirectResponse("/feeds", status_code=303)
+    check = feedcheck.check(lf.source)
+    remote = await community.listed_slug_for(db, slug)
+    from_directory = community.installed(db).get(slug)
+    items = [Li(Span("✕ " if i.level == "error" else "! ", cls="no-text" if i.level == "error" else "warn-text"), i.text,
+                Small(f" line {i.line}", cls="muted") if i.line else None) for i in check.items]
+    return shell("Share a feed", feeds_subnav("/feeds/submissions"),
+                 H2("Share with the community", cls="page-title"),
+                 P(f"{lf.feed.name} · {slug}.py" + (f" · update to your listed feed" if remote else ""), cls="muted"),
+                 error_box(error) if error else None,
+                 Div(P(Strong("This came from the community directory.")),
+                     P("Share your own feeds, or a copy you've changed a lot, rather than someone else's as it is."),
+                     cls="notice-card warn") if from_directory else None,
+                 Section(H3("Checks"),
+                         Ul(*items, cls="check-list") if items else P(Span("✓ ", cls="ok-text"),
+                                                                       "Passed: no network or file access, nothing personal spotted."),
+                         P("Fix errors before sending. Warnings are shown to the reviewer too.", cls="muted small")
+                         if items else None, cls="panel"),
+                 Form(Label("Name in the directory", Input(name="name", value=lf.feed.name, required=True, maxlength=80)),
+                      Label("One line on what it shows", Textarea(lf.feed.description, name="description", rows=2,
+                                                                   maxlength=200)),
+                      Label("Credit as (shown publicly, optional)",
+                            Input(name="credit", placeholder="A name, GitHub username or website", maxlength=80),
+                            Small("Leave it blank to stay anonymous. Your social accounts are never attached.",
+                                  cls="muted")),
+                      Label("Note for the reviewer (optional)", Input(name="note", maxlength=200,
+                                                                      placeholder="What changed, or anything to know")),
+                      Label(Input(type="checkbox", name="licence", required=True),
+                            "Share it under the MIT licence so others can copy and change it", cls="check"),
+                      Hidden(name="remote", value=remote),
+                      P("A maintainer reads every feed before it's listed, usually within a few days. Only the file and "
+                        "what you type here are sent, never your posts or accounts.", cls="muted small"),
+                      Div(Button("Send for review", cls="primary", disabled=not check.ok),
+                          A("See the file", href=f"/feeds/{slug}/edit", cls="button"), cls="row"),
+                      method="post", action=f"/feeds/{slug}/share", cls="stack"),
+                 active="/feeds")
+
+
+@rt("/feeds/{slug}/share")
+async def post(slug: str, name: str = "", description: str = "", credit: str = "", note: str = "", licence: str = "",
+               remote: str = ""):
+    lf = feeds.get_feed(slug)
+    if not lf or not lf.path:
+        return RedirectResponse("/feeds", status_code=303)
+    back = f"/feeds/{quote(slug)}/share?"
+    if not licence:
+        return RedirectResponse(back + urlencode({"error": "Tick the licence box to share it."}), status_code=303)
+    try:
+        await community.share(db, slug, name.strip() or lf.slug, description.strip(), credit.strip(), lf.source,
+                              note.strip(), remote)
+    except community.DirectoryError as e:
+        return RedirectResponse(back + urlencode({"error": str(e)}), status_code=303)
+    return RedirectResponse("/feeds/submissions?" + urlencode({"sent": name.strip()}), status_code=303)
+
+
+STATUS_LABELS = {"pending": ("In review", "warn-text"), "changes": ("Changes asked", "accent-text"),
+                 "approved": ("Listed", "ok-text"), "declined": ("Declined", "muted")}
+
+
+@rt("/feeds/submissions")
+async def get(sent: str = ""):
+    try:
+        subs = await community.my_submissions(db)
+    except community.DirectoryError as e:
+        return shell("Your submissions", feeds_subnav("/feeds/submissions"), H2("Your submissions", cls="page-title"),
+                     error_box(str(e)), active="/feeds")
+    locals_by_name = {r["name"]: r["local"] for r in community.receipts(db)}
+    rows = []
+    for s in subs:
+        label, tone = STATUS_LABELS.get(s["status"], (s["status"], "muted"))
+        local = locals_by_name.get(s["name"])
+        steps = None
+        if s["status"] == "pending":
+            steps = Ol(Li(Strong("Sent"), Small(ui_ago(s["created_at"]) + " ago", cls="muted"), cls="done"),
+                       Li(Strong("Automatic checks passed"), cls="done"),
+                       Li(Strong("Maintainer review"), Small("Usually a few days.", cls="muted"), cls="now"),
+                       Li(Strong("Listed in the directory"), cls="todo"), cls="steps")
+        rows.append(Section(
+            Div(H3(s["name"]), Span(label, cls=f"status {tone}"), cls="feed-head"),
+            steps,
+            Blockquote(f"“{s['reviewer_note']}”") if s["reviewer_note"] else None,
+            Small(f"{s['downloads']:,} downloads · ", A("See its page", href=community.page_url(s["slug"]), target="_blank",
+                                                        rel="noopener"), cls="muted")
+            if s["status"] == "approved" and s["slug"] else None,
+            Div(A("Edit and resend", href=f"/feeds/{local}/edit", cls="button small") if s["status"] == "changes" and local else None,
+                A("Send again", href=f"/feeds/{local}/share", cls="button small") if s["status"] == "changes" and local else None,
+                Form(Button("Withdraw", cls="small"), method="post", action=f"/feeds/submissions/{s['id']}/withdraw")
+                if s["status"] in ("pending", "changes") else None, cls="row"),
+            cls="panel submission"))
+    return shell("Your submissions", feeds_subnav("/feeds/submissions"), H2("Your submissions", cls="page-title"),
+                 Div(Strong(f"{sent} was sent."), " It passed the automatic checks and is waiting for a maintainer.",
+                     cls="result ok") if sent else None,
+                 *rows if rows else (P("You haven't shared any feeds yet. Open one of your feeds under ",
+                                       A("Yours", href="/feeds"), " and choose Share.", cls="muted"),),
+                 P("No sign-up needed. This device keeps a private receipt for each feed you send, which is how it checks "
+                   "the status and sends updates.", cls="muted small"), active="/feeds")
+
+
+def ui_ago(ts: float) -> str:
+    from .ui import ago
+    a = ago(ts)
+    return "moments" if a == "now" else a
+
+
+@rt("/feeds/submissions/{sid}/withdraw")
+async def post(sid: int):
+    try:
+        await community.withdraw(db, sid)
+    except community.DirectoryError:
+        pass
+    return RedirectResponse("/feeds/submissions", status_code=303)
 
 
 # ---------- settings and accounts ----------
@@ -1001,6 +1352,10 @@ async def get(error: str = "", ok: str = ""):
                  Section(H3("People"), P("Link someone's Bluesky, Mastodon and X accounts so mentions in your "
                                          "cross-posts tag them on every network.", cls="muted"),
                          A("Manage people", href="/people", cls="button"), cls="panel"),
+                 Section(H3("Privacy"), P("Anonymous feed stats are ", Strong({"yes": "on", "no": "off"}.get(
+                     community.choice(db) or "", "not chosen yet")), ". They help community feed authors and never include "
+                     "handles or posts.", cls="muted"), A("Privacy settings", href="/settings/privacy", cls="button"),
+                         cls="panel", id="privacy"),
                  Section(H3("Muted accounts"), P("One handle per line. Hidden from custom feeds.", cls="muted"),
                          Form(Textarea("\n".join(db.get("muted", [])), name="muted", rows=4),
                               Button("Save", cls="small"), method="post", action="/settings/muted", cls="stack"),

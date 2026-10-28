@@ -62,7 +62,7 @@ def imported_modules(root: Path = ROOT) -> list[str]:
     """Top-level modules the app code imports, so a shell can tell whether it has them all."""
     names = set()
     for path in (root / "crossposter").rglob("*.py"):
-        for node in ast.walk(ast.parse(path.read_text(), str(path))):
+        for node in ast.walk(ast.parse(path.read_text(encoding="utf-8"), str(path))):
             if isinstance(node, ast.Import):
                 names.update(a.name.split(".")[0] for a in node.names)
             elif isinstance(node, ast.ImportFrom) and node.level == 0 and node.module:

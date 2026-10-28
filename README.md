@@ -114,6 +114,31 @@ def score(post: Post, ctx: Ctx) -> dict:         # a number, or named terms that
 Feed code runs on your server with full Python, which is the point. Only you can edit it, behind
 your app password; don't load feed files from people you don't trust.
 
+## Community feeds
+
+[Broadsheet Feeds](https://broadsheet-feeds-production.up.railway.app) is a directory of feeds people have
+shared. In the app, **Feeds › Community** lists them with their code, download counts and how they're
+doing; **Get** shows what a feed reads and its code before adding it to Home. To share one of yours,
+choose **Share** on its card: the app checks it for anything personal (one of your lists, a handle),
+sends only the file, name, description and an optional credit line, and you follow the review under
+**Feeds › Your submissions**. No account is needed; the app keeps a private receipt for each feed.
+
+Shared feeds may only import `crossposter.feeds` and standard tools like `math`, `collections` and
+`re`, and can't touch the network or files (`crossposter/feedcheck.py` checks this without running
+the code). A maintainer still reads every feed before it's listed.
+
+**Anonymous stats.** The first time you add a community feed, the app asks whether to share
+anonymous counts, with neither answer picked. If you say yes, once a week it sends, for community
+feeds only: whether each is on Home, a rough "installed for" band, visits, posts read, posts liked or
+replied to, and its tab position. Never handles, accounts, posts or your own feeds, and no device ID.
+Settings › Privacy shows the exact report and turns it off. The directory folds each report into
+weekly totals and discards it, keeps no IP addresses, and shows a figure only once 10 apps report it.
+
+The directory itself is `directory/` (FastHTML + SQLite), deployed as its own Railway service from
+`directory/Dockerfile` with a volume at `/data`. `ADMIN_PASSWORD` opens the review queue at `/review`.
+Run it locally with `HTTPS=0 ADMIN_PASSWORD=pw python -m directory.app` (port 5002) and point the app
+at it with `DIRECTORY_URL=http://127.0.0.1:5002`.
+
 ## X
 
 X's API is pay-per-use: $0.005 per post read, $0.015 per post created, $0.20 for a post with a link

@@ -35,6 +35,9 @@ class Settings:
     x_enabled: bool = field(default_factory=lambda: _bool("X_ENABLED", True))
     x_client_id: str = field(default_factory=lambda: os.environ.get("X_CLIENT_ID", ""))
     x_client_secret: str = field(default_factory=lambda: os.environ.get("X_CLIENT_SECRET", ""))
+    # The community feed directory (Broadsheet Feeds): browse and share feeds, and opt-in anonymous stats.
+    directory_url: str = field(default_factory=lambda: os.environ.get(
+        "DIRECTORY_URL", "https://broadsheet-feeds-production.up.railway.app").rstrip("/"))
     x_monthly_cap_usd: float = field(default_factory=lambda: float(os.environ.get("X_MONTHLY_CAP_USD", "10")))
 
     @property
