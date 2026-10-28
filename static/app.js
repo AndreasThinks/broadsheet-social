@@ -3,7 +3,9 @@
 (function () {
   "use strict";
 
-  if ("serviceWorker" in navigator) {
+  // In the browser version the page's own service worker runs the app, so don't replace it with ours.
+  var inBrowserBuild = !!document.querySelector('meta[name="broadsheet-browser"]');
+  if ("serviceWorker" in navigator && !inBrowserBuild) {
     navigator.serviceWorker.register("/sw.js", { scope: "/" }).catch(function (e) { console.warn("sw", e); });
   }
 
@@ -186,12 +188,20 @@
     var perm = await Notification.requestPermission();
     if (perm !== "granted") { status("Notifications were not allowed."); return; }
     var reg = await navigator.serviceWorker.ready;
-    var key = (await (await fetch("/push/key")).json()).publicKey;
+    var keyInfo = await (await fetch("/push/key")).json();
+    if (!keyInfo.publicKey) { status(keyInfo.error || "Push isn't available."); return; }
+    var key = b64ToBytes(keyInfo.publicKey);
     var sub = await reg.pushManager.getSubscription();
-    if (!sub) sub = await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: b64ToBytes(key) });
+    if (sub && sub.options.applicationServerKey &&
+        new Uint8Array(sub.options.applicationServerKey).join() !== key.join()) {
+      await sub.unsubscribe();  // made with a different server's key
+      sub = null;
+    }
+    if (!sub) sub = await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: key });
     var r = await fetch("/push/subscribe", { method: "POST", headers: { "Content-Type": "application/json" },
                                              body: JSON.stringify(sub) });
-    status(r.ok ? "Notifications are on for this device." : "Couldn't save the subscription.");
+    var j = await r.json().catch(function () { return {}; });
+    status(r.ok ? (j.message || "Notifications are on for this device.") : (j.error || "Couldn't save the subscription."));
   }
   async function testPush() {
     var r = await fetch("/push/test", { method: "POST" });

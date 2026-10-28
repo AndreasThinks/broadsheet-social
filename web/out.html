@@ -1,0 +1,9 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Broadsheet</title>
+<script>
+  // Leaves the app's frame for a sign-in page that refuses to be framed. Only from inside the app.
+  var to = new URLSearchParams(location.search).get("to") || "";
+  if (window.top !== window && /^https:\/\//.test(to)) top.location.replace(to);
+  else location.replace("/web");
+</script>

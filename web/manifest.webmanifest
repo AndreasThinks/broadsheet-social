@@ -1,0 +1,16 @@
+{
+  "name": "Broadsheet",
+  "short_name": "Broadsheet",
+  "id": "/web",
+  "start_url": "/web",
+  "scope": "/web",
+  "display": "standalone",
+  "background_color": "#ffffff",
+  "theme_color": "#ffffff",
+  "description": "Read and post across Bluesky and Mastodon. Everything stays in this browser.",
+  "icons": [
+    {"src": "/static/icons/icon-192.png", "sizes": "192x192", "type": "image/png"},
+    {"src": "/static/icons/icon-512.png", "sizes": "512x512", "type": "image/png"},
+    {"src": "/static/icons/maskable-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable"}
+  ]
+}

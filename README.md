@@ -65,6 +65,17 @@ Things that differ from the web version: Bluesky uses its local sign-in mode, so
 
 On Linux, or to run from source: `pip install -r requirements-desktop.txt` then `python -m crossposter_desktop` (pywebview needs GTK or Qt on Linux; `--headless` serves it to your browser instead). To build Android: `cd android && ./gradlew assembleRelease` with the Android SDK and Python 3.13 installed.
 
+## In your browser, with nothing stored on a server
+
+**https://broadsheet-feeds-production.up.railway.app/web** runs the same Python app inside the web page, using [Pyodide](https://pyodide.org/). Your accounts, tokens, cached posts and feeds are kept in that browser's IndexedDB; the site only hands out the files. How it fits together:
+
+- `web/shell.js` (the page at `/web`) starts the app in a Web Worker (`web/worker.js`) and shows its pages in a full-window frame.
+- `web/sw.js`, a service worker, sends every request the frame makes to the worker instead of the network, so the app's pages, forms and htmx calls work unchanged. `crossposter/browser.py` answers them by calling the ASGI app directly, and sends the app's own HTTP calls out through the browser's `fetch`.
+- Bluesky signs in as a public OAuth client (no secret; the metadata is served at `/web/oauth/bluesky/client-metadata.json`). Mastodon registers an app per server as usual. Sign-in pages open full-window, since they refuse to load in a frame, and come back to `/web/auth/...`.
+- `web/build.py` packs the app and the extra wheels into `web/dist` when the website's image is built (`directory/Dockerfile`).
+
+What's different: no X (its API doesn't allow web pages); Mastodon notifications are pushed straight from your Mastodon server to the browser, while Bluesky notifications only appear while the page is open; one tab at a time. Clearing the site's data signs you out, so Settings › This browser offers a backup file you can restore in another browser. Locally: `python -m web.build`, then `HTTPS=0 python -m directory.app` and open http://127.0.0.1:5002/web.
+
 ## Custom feeds
 
 A custom feed is a Python file in `feeds/` (on Railway, `/data/feeds`; the starter feeds are copied

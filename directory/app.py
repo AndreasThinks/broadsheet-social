@@ -31,6 +31,7 @@ from .store import MIN_REPORTS, Rejected, Store
 
 ROOT = Path(__file__).resolve().parent
 REPO = ROOT.parent
+WEB = REPO / "web"
 DATA_DIR = Path(os.environ.get("DATA_DIR", "directory-data"))
 ADMIN_PASSWORD = os.environ.get("ADMIN_PASSWORD", "")
 SOURCE_URL = "https://github.com/AndreasThinks/cross-poster-"
@@ -158,6 +159,14 @@ def get(session):
         Div(*cards, cls="downloads", id="download"),
         P(f"Built from commit {rel['commit'][:7]} on {day(rel['published_at'])}." if rel else
           "The first build hasn't been published yet.", cls="muted small"),
+        Section(H2("Or use it in your browser"),
+                P("Nothing to install: Broadsheet runs inside the web page, and your accounts, posts and feeds stay in "
+                  "that browser. This site never sees them. The first visit downloads about 20 MB."),
+                P("The browser version does Bluesky and Mastodon. X doesn't let web pages connect to it, so for X use one "
+                  "of the apps above. Mastodon can notify you while the page is closed; Bluesky only while it's open. "
+                  "Clearing your browser's data for this site signs you out, so keep a backup from Settings.",
+                  cls="muted"),
+                P(A("Open Broadsheet in your browser", href="/web", cls="button primary")), cls="block", id="browser"),
         Section(H2("Staying up to date"),
                 P("The desktop apps update themselves: they fetch new versions in the background and switch over the next "
                   "time you open them. On Android, install the new APK over the old one, or add this page to ",
@@ -222,6 +231,69 @@ async def put(commit: str, name: str, req: Request):
     except Refused as e:
         return JSONResponse({"error": str(e)}, status_code=e.status)
     return JSONResponse({"ok": True, "bytes": size})
+
+
+# ---------- the browser version (web/) ----------
+# /web is a page that runs the app itself in the browser. This server only hands out its files; the app's data never
+# comes back here. See crossposter/browser.py and web/sw.js.
+
+def _web_shell():
+    return FileResponse(WEB / "shell.html", headers={"Cache-Control": "no-cache"})
+
+
+def browser_client_metadata(base_url: str) -> dict:
+    """Must match crossposter.adapters.bluesky_oauth.browser_client_metadata (a test checks they agree)."""
+    return {
+        "client_id": f"{base_url}/oauth/bluesky/client-metadata.json",
+        "client_name": "Broadsheet",
+        "client_uri": base_url,
+        "application_type": "web",
+        "grant_types": ["authorization_code", "refresh_token"],
+        "response_types": ["code"],
+        "redirect_uris": [f"{base_url}/auth/bluesky/callback"],
+        "scope": "atproto transition:generic",
+        "token_endpoint_auth_method": "none",
+        "dpop_bound_access_tokens": True,
+    }
+
+
+def _origin(req: Request) -> str:
+    host = req.headers.get("host", "localhost")
+    return ("http://" if host.startswith(("localhost", "127.0.0.1")) else "https://") + host
+
+
+@rt("/web")
+def get():
+    return _web_shell()
+
+
+@rt("/web/oauth/bluesky/client-metadata.json")
+def get(req: Request):
+    """The browser version signs in to Bluesky as this public client (no secret: tokens stay in the browser)."""
+    return JSONResponse(browser_client_metadata(_origin(req) + "/web"), headers={"Cache-Control": "max-age=300"})
+
+
+@rt("/web/{path:path}")
+def get(path: str):
+    """Any page of the app, such as a sign-in coming back: the shell opens it inside the browser version."""
+    return _web_shell()
+
+
+@rt("/web-files/{fname:path}")
+def get(fname: str):
+    for base in (WEB / "dist", WEB):
+        path = (base / fname).resolve()
+        if path.is_file() and base.resolve() in path.parents and path.suffix != ".py":
+            break
+    else:
+        return Response("Not found", status_code=404)
+    headers = {"Cache-Control": "no-cache"}
+    if fname == "sw.js":
+        headers["Service-Worker-Allowed"] = "/"  # it serves the app's frame, whose pages sit at the site's root
+    elif fname.startswith("wheels/") or (fname.startswith("app-") and fname.endswith(".zip")):
+        headers["Cache-Control"] = "public, max-age=31536000, immutable"  # versioned names
+    media = {".webmanifest": "application/manifest+json", ".whl": "application/zip"}.get(path.suffix)
+    return FileResponse(path, media_type=media, headers=headers)
 
 
 # ---------- directory ----------

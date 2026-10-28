@@ -36,7 +36,7 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name
 
 ROOT = Path(__file__).resolve().parent.parent
 STATIC = ROOT / "static"
-db = DB(settings.db_path)
+db = DB(settings.db_path, wal=not settings.browser)
 
 
 def seed_feeds() -> None:
@@ -80,7 +80,7 @@ hdrs = (
     Link(rel="icon", type="image/png", href="/static/icons/icon-192.png"),
     Link(rel="stylesheet", href="/static/app.css"),
     Script(src="/static/app.js", defer=True),
-)
+) + ((Meta(name="broadsheet-browser", content="1"), Script(src="/web-files/frame.js", defer=True)) if settings.browser else ())
 
 app, rt = fast_app(
     pico=False, hdrs=hdrs, secret_key=app_secret(), lifespan=lifespan, title="Broadsheet",
@@ -1325,8 +1325,21 @@ async def get(error: str = "", ok: str = ""):
                   for k, label in (("reply", "Replies"), ("mention", "Mentions"), ("quote", "Quotes"),
                                    ("follow", "New followers"), ("like", "Likes"), ("repost", "Reposts"))]
     usage = xapi.usage(db)
-    x_section = _x_settings() if settings.x_enabled else Section(
-        H3("X"), P("X is switched off on this server (X_ENABLED=false).", cls="muted"), cls="panel")
+    if settings.browser:
+        x_section = Section(H3("X"), P("X isn't available in the browser version, because X doesn't let web pages "
+                                       "connect to it. The desktop and Android apps support X.", cls="muted"), cls="panel")
+    elif settings.x_enabled:
+        x_section = _x_settings()
+    else:
+        x_section = Section(H3("X"), P("X is switched off on this server (X_ENABLED=false).", cls="muted"), cls="panel")
+    if settings.browser:
+        notify_intro = P("Mastodon can notify this browser even when Broadsheet is closed. Bluesky notifications only "
+                         "show up while Broadsheet is open.", cls="muted")
+        notify_buttons = (Button("Turn on Mastodon notifications", id="push-on", cls="primary"),)
+    else:
+        notify_intro = P("On iPhone, first add this app to your home screen (Share, then Add to Home Screen) and open it "
+                         "from there. Then switch notifications on.", cls="muted")
+        notify_buttons = (Button("Turn on notifications", id="push-on", cls="primary"), Button("Send a test", id="push-test"))
     return shell("Settings",
                  H2("Settings", cls="page-title"),
                  Div(error, cls="error") if error else None, Div(ok, cls="result ok") if ok else None,
@@ -1340,11 +1353,8 @@ async def get(error: str = "", ok: str = ""):
                          P("Any server that speaks the Mastodon API works too: GoToSocial, Pleroma, Akkoma, Pixelfed and others.",
                            cls="muted"),
                          cls="panel"),
-                 Section(H3("Notifications on this device"),
-                         P("On iPhone, first add this app to your home screen (Share, then Add to Home Screen) and open it "
-                           "from there. Then switch notifications on.", cls="muted"),
-                         Div(Button("Turn on notifications", id="push-on", cls="primary"),
-                             Button("Send a test", id="push-test"), Span(id="push-status", cls="muted"), cls="row"),
+                 Section(H3("Notifications on this device"), notify_intro,
+                         Div(*notify_buttons, Span(id="push-status", cls="muted"), cls="row"),
                          Form(Div(*kind_boxes, cls="checks"), Button("Save", cls="small"), method="post",
                               action="/settings/notify"),
                          cls="panel"),
@@ -1360,8 +1370,25 @@ async def get(error: str = "", ok: str = ""):
                          Form(Textarea("\n".join(db.get("muted", [])), name="muted", rows=4),
                               Button("Save", cls="small"), method="post", action="/settings/muted", cls="stack"),
                          cls="panel"),
+                 _browser_settings() if settings.browser else None,
                  Form(Button("Sign out", cls="small"), method="post", action="/logout") if settings.app_password else None,
                  active="/settings")
+
+
+def _browser_settings():
+    return Section(
+        H3("This browser", id="browser"),
+        P("Everything Broadsheet knows (your sign-ins, feeds and settings) is kept in this browser only. Nothing is "
+          "stored on a server. Clearing this site's data in your browser signs you out of everything.", cls="muted"),
+        P("To move to another device or browser, download a backup here and restore it there. Keep the file private: "
+          "it holds your sign-ins.", cls="muted"),
+        Div(Button("Download a backup", id="backup-download", cls="small"), cls="row"),
+        Form(Label("Restore a backup", Input(type="file", name="backup", accept=".zip,application/zip", required=True)),
+             Button("Restore", cls="small"), method="post", action="/browser/import", enctype="multipart/form-data",
+             cls="stack"),
+        Form(Button("Erase everything from this browser", cls="small danger"), method="post", action="/browser/erase",
+             onsubmit="return confirm('Sign out of every account and delete your feeds and settings from this browser?')"),
+        cls="panel")
 
 
 def _x_settings():
@@ -1405,6 +1432,11 @@ def _x_settings():
 async def post(req):
     form = await req.form()
     db.set("notify_kinds", form.getlist("kinds"))
+    if settings.browser and db.get("browser_push_sub"):
+        try:
+            await _browser_push_subscribe(db.get("browser_push_sub"))
+        except Exception as e:
+            return _back(e)
     return RedirectResponse("/settings?ok=Saved", status_code=303)
 
 
@@ -1519,8 +1551,36 @@ def get():
 
 # ---------- push ----------
 
+# In the browser build there's no server to push from, so Mastodon pushes to the browser itself: we subscribe with
+# the Mastodon server's key and it sends straight to the browser's push service.
+
+def _browser_push_accounts():
+    return [a for a in accounts() if a.network == "mastodon"]
+
+
+async def _browser_push_subscribe(sub: dict) -> int:
+    accts = _browser_push_accounts()
+    if not accts:
+        raise NetworkError("Connect a Mastodon account first.")
+    # A browser holds one push subscription, tied to one server's key: that covers every account on that server.
+    host = mastodon.normalise_instance(accts[0].rec.server)
+    same = [a for a in accts if mastodon.normalise_instance(a.rec.server) == host]
+    for a in same:
+        await mastodon.subscribe_push(a.rec, sub, push.notify_kinds(db))
+    db.set("browser_push_sub", sub)
+    return len(same)
+
+
 @rt("/push/key")
-def get():
+async def get():
+    if settings.browser:
+        accts = _browser_push_accounts()
+        if not accts:
+            return JSONResponse({"error": "Connect a Mastodon account first."})
+        try:
+            return JSONResponse({"publicKey": await mastodon.vapid_key(db, accts[0].rec.server)})
+        except NetworkError as e:
+            return JSONResponse({"error": str(e)})
     return JSONResponse({"publicKey": push.vapid_keys(db)["public"]})
 
 
@@ -1529,6 +1589,13 @@ async def post(req):
     sub = await req.json()
     if not sub.get("endpoint") or not (sub.get("keys") or {}).get("p256dh"):
         return JSONResponse({"ok": False}, status_code=400)
+    if settings.browser:
+        try:
+            n = await _browser_push_subscribe(sub)
+        except Exception as e:
+            return JSONResponse({"ok": False, "error": str(e)}, status_code=502)
+        return JSONResponse({"ok": True, "message": f"Mastodon notifications are on for {n} "
+                                                    f"{'account' if n == 1 else 'accounts'} in this browser."})
     push.add_subscription(db, sub)
     return JSONResponse({"ok": True})
 
@@ -1543,6 +1610,35 @@ async def post(req):
 async def post():
     n = await push.send(db, "Broadsheet", "Notifications are working.", "/notifications", tag="test")
     return JSONResponse({"sent": n})
+
+
+# ---------- the browser build's own data ----------
+
+if settings.browser:
+    from . import browser
+
+    @rt("/browser/export")
+    def get():
+        return Response(browser.export_zip(db, settings.data_dir), media_type="application/zip",
+                        headers={"Content-Disposition": 'attachment; filename="broadsheet-backup.zip"'})
+
+    @rt("/browser/import")
+    async def post(req):
+        upload = (await req.form()).get("backup")
+        try:
+            browser.import_zip(db, settings.data_dir, await upload.read())
+        except Exception as e:
+            return RedirectResponse("/settings?" + urlencode({"error": f"Couldn't restore that backup: {e}"}) + "#browser",
+                                    status_code=303)
+        feeds._results.clear()
+        return RedirectResponse("/settings?ok=Backup+restored", status_code=303)
+
+    @rt("/browser/erase")
+    def post():
+        browser.erase(db, settings.data_dir)
+        seed_feeds()
+        feeds._results.clear()
+        return RedirectResponse("/settings?ok=Everything+was+erased+from+this+browser", status_code=303)
 
 
 # ---------- PWA files ----------

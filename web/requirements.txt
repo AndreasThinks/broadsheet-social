@@ -1,0 +1,9 @@
+# Pure-Python wheels the browser build loads on top of Pyodide's own packages (see web/build.py).
+# Pyodide supplies cryptography, Pillow, beautifulsoup4, python-dateutil, httpx, anyio and sqlite3.
+python-fasthtml==0.14.14
+fastcore==2.2.35
+starlette==1.10.0
+oauthlib==4.0.0
+itsdangerous==2.2.0
+python-multipart==0.0.32
+joserfc==1.7.7
