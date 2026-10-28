@@ -108,7 +108,7 @@ class Store:
         if self.one("select value from kv where key='seeded'"):
             return
         for path in sorted(folder.glob("*.py")):
-            source = path.read_text()
+            source = path.read_text(encoding="utf-8")
             r = feedcheck.check(source)
             if r.ok:
                 self._list(slugify(r.name), r, source, credit, "", "First listed")

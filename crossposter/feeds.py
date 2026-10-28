@@ -186,7 +186,7 @@ _loaded: dict[str, LoadedFeed] = {}
 
 def _load(path: Path) -> LoadedFeed:
     slug = path.stem
-    source = path.read_text()
+    source = path.read_text(encoding="utf-8")
     mtime = path.stat().st_mtime
     modname = f"crossposter_user_feeds.{slug}"
     try:

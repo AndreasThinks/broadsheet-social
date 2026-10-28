@@ -942,7 +942,7 @@ async def get(slug: str, start: str = ""):
 async def post(slug: str, code: str):
     slug = _safe_slug(slug)
     settings.feeds_dir.mkdir(parents=True, exist_ok=True)
-    (settings.feeds_dir / f"{slug}.py").write_text(code.replace("\r\n", "\n"))
+    (settings.feeds_dir / f"{slug}.py").write_text(code.replace("\r\n", "\n"), encoding="utf-8")
     feeds._results.pop(slug, None)
     return RedirectResponse(f"/feeds#{slug}" if (feeds.get_feed(slug) or feeds.COMBINED).error else f"/?custom={slug}",
                             status_code=303)

@@ -105,7 +105,7 @@ def _same_file(source: str) -> str | None:
     """A feed file you already have with exactly this code (say a starter feed), so adding it doesn't make a second tab."""
     d = settings.feeds_dir
     for path in sorted(d.glob("*.py")) if d.exists() else []:
-        if not path.name.startswith("_") and path.read_text() == source:
+        if not path.name.startswith("_") and path.read_text(encoding="utf-8") == source:
             return path.stem
     return None
 
@@ -115,7 +115,7 @@ def same_file_named(f: dict) -> str | None:
     path = settings.feeds_dir / f"{f['slug'].replace('-', '_')}.py"
     candidates = [path] + sorted(settings.feeds_dir.glob("*.py")) if settings.feeds_dir.exists() else []
     for p in candidates:
-        if p.is_file() and not p.name.startswith("_") and f'name="{f["name"]}"' in p.read_text():
+        if p.is_file() and not p.name.startswith("_") and f'name="{f["name"]}"' in p.read_text(encoding="utf-8"):
             return p.stem
     return None
 
@@ -128,7 +128,7 @@ async def add(db, remote: str) -> str:
         raise DirectoryError("That feed didn't pass the checks on this device, so it wasn't added.")
     local = local_for(db, remote) or _same_file(source) or _local_name(remote)
     settings.feeds_dir.mkdir(parents=True, exist_ok=True)
-    (settings.feeds_dir / f"{local}.py").write_text(source)
+    (settings.feeds_dir / f"{local}.py").write_text(source, encoding="utf-8")
     (settings.feeds_dir / f"_removed_{local}.py").unlink(missing_ok=True)
     recs = installed(db)
     prev = recs.get(local) or {}
