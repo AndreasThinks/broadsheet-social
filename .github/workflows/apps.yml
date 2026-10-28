@@ -43,6 +43,7 @@ jobs:
           - os: macos-latest
             platform: macos
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -63,8 +64,12 @@ jobs:
           Get-ChildItem "dist\Broadsheet" -Recurse -File | ForEach-Object {
             Set-Content -LiteralPath $_.FullName -Stream Zone.Identifier -Value "[ZoneTransfer]`r`nZoneId=3"
           }
-          $p = Start-Process -FilePath "dist\Broadsheet\Broadsheet.exe" -ArgumentList "--smoke" -Wait -PassThru
+          # A crash in the windowed app opens an error dialog and waits, so give up after three minutes.
+          $p = Start-Process -FilePath "dist\Broadsheet\Broadsheet.exe" -ArgumentList "--smoke" -PassThru
+          $null = $p.Handle  # keeps ExitCode readable after the wait
+          $done = $p.WaitForExit(180000)
           Get-Content "$env:CROSSPOSTER_DESKTOP_DATA\desktop.log" -ErrorAction SilentlyContinue
+          if (-not $done) { $p.Kill(); Write-Error "Broadsheet.exe didn't finish the smoke test (crashed?)"; exit 1 }
           if ($p.ExitCode -ne 0) { exit $p.ExitCode }
           Compress-Archive -Path "dist\Broadsheet" -DestinationPath "Broadsheet-windows.zip"
       - name: Smoke test (macOS)

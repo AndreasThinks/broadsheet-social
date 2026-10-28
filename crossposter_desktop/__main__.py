@@ -48,6 +48,23 @@ def bundled_dir() -> Path:
     return Path(__file__).resolve().parent.parent
 
 
+def unblock_bundled_dlls() -> None:
+    """Clear Windows' "downloaded from the internet" flag from the DLLs that shipped with this build.
+
+    Unzipping a download in Explorer copies the flag onto every file, and .NET then refuses to load
+    pythonnet's Python.Runtime.dll, which the window needs. The flag is an NTFS stream named Zone.Identifier.
+    """
+    if not (FROZEN and sys.platform == "win32"):
+        return
+    for dll in Path(getattr(sys, "_MEIPASS", Path(sys.executable).parent)).rglob("*.dll"):
+        try:
+            os.remove(f"{dll}:Zone.Identifier")
+        except FileNotFoundError:
+            pass
+        except OSError as e:
+            log.warning("couldn't unblock %s: %s", dll, e)
+
+
 def _free(port: int) -> bool:
     with socket.socket() as s:
         try:
@@ -160,6 +177,7 @@ def main(argv=None) -> None:
         # A windowed build has no console; keep a log next to the data instead.
         sys.stdout = sys.stderr = open(data / "desktop.log", "a", buffering=1, encoding="utf-8")
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
+    unblock_bundled_dlls()
     port = pick_port(data, args.port)
     token = configure(data, port)
     bundled = bundled_dir()
