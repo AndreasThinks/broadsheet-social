@@ -1,4 +1,5 @@
-// Broadsheet client: service worker, video, composer counters and @mentions, push sign-up.
+// Broadsheet client: service worker, video, composer counters and @mentions, push sign-up, arranging tabs,
+// pull to refresh.
 (function () {
   "use strict";
 
@@ -198,12 +199,166 @@
     status(j.sent ? "Sent to " + j.sent + " device(s)." : "No devices are subscribed yet.");
   }
 
+  // ---- Arrange tabs: drag a row by its handle (mouse, pen or finger), or nudge it with the arrows ----
+  function setupArrange() {
+    var list = document.getElementById("arrange");
+    if (!list) return;
+    var statusEl = document.getElementById("arrange-status"), saveTimer = null, saveSeq = 0;
+    function save() {
+      clearTimeout(saveTimer);
+      statusEl.textContent = "Saving…";
+      saveTimer = setTimeout(function () {
+        var seq = ++saveSeq;
+        var tabs = Array.from(list.querySelectorAll(".arrange-item")).map(function (li) {
+          return { key: li.dataset.key, visible: li.querySelector(".arrange-show").checked };
+        });
+        fetch("/feeds/arrange", { method: "POST", headers: { "Content-Type": "application/json" },
+                                  body: JSON.stringify({ tabs: tabs }) })
+          .then(function (r) { if (seq === saveSeq) statusEl.textContent = r.ok ? "Saved" : "Couldn't save. Try again."; })
+          .catch(function () { if (seq === saveSeq) statusEl.textContent = "Couldn't save. Are you offline?"; });
+      }, 250);
+    }
+
+    list.addEventListener("change", function (e) {
+      if (!e.target.classList.contains("arrange-show")) return;
+      e.target.closest(".arrange-item").classList.toggle("off", !e.target.checked);
+      save();
+    });
+    list.addEventListener("click", function (e) {
+      var b = e.target.closest(".nudge");
+      if (!b) return;
+      var li = b.closest(".arrange-item");
+      if (b.dataset.step === "-1" && li.previousElementSibling) list.insertBefore(li, li.previousElementSibling);
+      else if (b.dataset.step === "1" && li.nextElementSibling) list.insertBefore(li.nextElementSibling, li);
+      else return;
+      b.focus();
+      flash(li);
+      save();
+    });
+    function flash(li) { li.classList.remove("moved"); void li.offsetWidth; li.classList.add("moved"); }
+
+    var drag = null;
+    list.addEventListener("pointerdown", function (e) {
+      var grip = e.target.closest(".grip");
+      if (!grip || e.button > 0) return;
+      e.preventDefault();
+      var li = grip.closest(".arrange-item");
+      grip.setPointerCapture(e.pointerId);
+      drag = { li: li, grab: e.clientY - li.getBoundingClientRect().top, y: e.clientY,
+               before: li.nextElementSibling, frame: 0 };
+      li.classList.add("dragging");
+      list.classList.add("sorting");
+      drag.frame = requestAnimationFrame(follow);
+    });
+    document.addEventListener("pointermove", function (e) { if (drag) drag.y = e.clientY; });
+    function follow() {
+      if (!drag) return;
+      var li = drag.li, y = drag.y;
+      // keep going when the finger is near the top or bottom of the screen
+      if (y < 72) window.scrollBy(0, -Math.ceil((72 - y) / 6));
+      else if (y > window.innerHeight - 72) window.scrollBy(0, Math.ceil((y - window.innerHeight + 72) / 6));
+      var others = Array.from(list.children).filter(function (o) { return o !== li; });
+      var next = null;
+      for (var i = 0; i < others.length; i++) {
+        var r = others[i].getBoundingClientRect();
+        if (y < r.top + r.height / 2) { next = others[i]; break; }
+      }
+      if (li.nextElementSibling !== next) place(li, next);
+      li.style.transform = "";
+      var top = li.getBoundingClientRect().top;
+      li.style.transform = "translateY(" + (y - drag.grab - top) + "px)";
+      drag.frame = requestAnimationFrame(follow);
+    }
+    // Put li before next (null = at the end) by moving its neighbours round it: moving the dragged row itself
+    // would make the browser drop the pointer mid-drag.
+    function place(li, next) {
+      var items = Array.from(list.children), from = items.indexOf(li), to = next ? items.indexOf(next) : items.length;
+      if (to > from) items.slice(from + 1, to).forEach(function (o) { list.insertBefore(o, li); });
+      else items.slice(to, from).forEach(function (o) { list.insertBefore(o, li.nextElementSibling); });
+    }
+    function drop() {
+      if (!drag) return;
+      var d = drag;
+      drag = null;
+      cancelAnimationFrame(d.frame);
+      d.li.style.transform = "";
+      d.li.classList.remove("dragging");
+      list.classList.remove("sorting");
+      if (d.li.nextElementSibling !== d.before) { flash(d.li); save(); }
+    }
+    document.addEventListener("pointerup", drop);
+    document.addEventListener("pointercancel", drop);
+  }
+
+  // ---- Pull to refresh: at the top of a timeline, pull down and let go to fetch the newest posts ----
+  var PULL_READY = 64, PULL_MAX = 110;
+  var ARROW = '<svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" ' +
+              'stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 5v14M6 13l6 6 6-6"/></svg>';
+  function setupPull() {
+    var target = document.querySelector("[data-refresh]");
+    if (!target || !("ontouchstart" in window || navigator.maxTouchPoints > 0)) return;
+    document.documentElement.classList.add("pull-page");  // stops the browser's own pull-to-reload competing
+    var bar = el("div", "ptr");
+    bar.setAttribute("aria-live", "polite");
+    bar.innerHTML = '<div class="ptr-inner"><span class="ptr-arrow">' + ARROW + '</span><span class="spinner"></span>' +
+                    '<span class="ptr-label">Pull to refresh</span></div>';
+    target.parentNode.insertBefore(bar, target);
+    var label = bar.querySelector(".ptr-label");
+    var start = null, pulling = false, dist = 0, busy = false;
+
+    function set(h) { dist = h; bar.style.height = h + "px"; }
+    function reset() { bar.classList.remove("pulling", "ready", "refreshing"); set(0); }
+
+    document.addEventListener("touchstart", function (e) {
+      if (busy || e.touches.length !== 1 || window.scrollY > 0) { start = null; return; }
+      if (e.target.closest && e.target.closest("input, textarea, select, video, .mention-menu")) { start = null; return; }
+      start = { x: e.touches[0].clientX, y: e.touches[0].clientY };
+      pulling = false;
+    }, { passive: true });
+    document.addEventListener("touchmove", function (e) {
+      if (!start) return;
+      var dx = e.touches[0].clientX - start.x, dy = e.touches[0].clientY - start.y;
+      if (!pulling) {
+        if (dy > 8 && dy > Math.abs(dx) * 1.5 && window.scrollY <= 0) { pulling = true; bar.classList.add("pulling"); }
+        else if (Math.abs(dx) > 8 || dy < -4) { start = null; return; }
+        else return;
+      }
+      e.preventDefault();
+      set(Math.min(PULL_MAX, Math.max(0, dy - 8) * 0.55));
+      var ready = dist >= PULL_READY;
+      bar.classList.toggle("ready", ready);
+      label.textContent = ready ? "Let go to refresh" : "Pull to refresh";
+    }, { passive: false });
+    function end() {
+      if (!start) return;
+      start = null;
+      if (!pulling) return;
+      pulling = false;
+      bar.classList.remove("pulling");
+      if (dist < PULL_READY) { reset(); return; }
+      busy = true;
+      bar.classList.add("refreshing");
+      label.textContent = "Fetching the latest";
+      set(52);
+      var url = target.dataset.refresh;
+      if (url === "reload") { window.location.reload(); return; }
+      var done = function () { busy = false; reset(); label.textContent = "Pull to refresh"; };
+      var safety = setTimeout(done, 30000);
+      Promise.resolve(window.htmx ? htmx.ajax("GET", url, { target: target, swap: "innerHTML" }) : null)
+        .catch(function () {}).then(function () { clearTimeout(safety); done(); });
+    }
+    document.addEventListener("touchend", end);
+    document.addEventListener("touchcancel", end);
+  }
+
   function init(root) {
     setupVideos(root);
     updateCounts();
   }
   document.addEventListener("DOMContentLoaded", function () {
     init(document);
+    setupArrange();
+    setupPull();
     document.addEventListener("input", function (e) {
       if (e.target.closest && e.target.closest("#compose-form")) updateCounts();
       if (e.target.classList && e.target.classList.contains("mentionable")) onMentionInput(e.target);

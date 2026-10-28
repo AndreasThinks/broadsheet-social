@@ -270,3 +270,46 @@ label > input, label > textarea { margin-top: 4px; font-weight: 400; }
 .reference { margin-top: 16px; } .reference h3 { font-size: .95rem; margin: 12px 0 4px; }
 .reference ul { padding-left: 18px; } .reference li { margin: 2px 0; font-size: .9rem; }
 .feed-bar .row { flex-wrap: nowrap; gap: 6px; }
+
+/* arrange tabs: a numbered list you drag by the handle; each row lifts with a rule under it while it moves */
+.arrange-list { list-style: none; padding: 0; margin: 14px 0 0; border-top: 1px solid var(--rule); counter-reset: tab; }
+.arrange-item { counter-increment: tab; display: flex; align-items: center; gap: 6px; min-height: 64px;
+  border-bottom: 1px solid var(--line); background: var(--bg); position: relative; }
+.arrange-item::before { content: counter(tab); width: 22px; flex: none; text-align: right; color: var(--muted);
+  font: 500 .8rem/1 var(--sans); font-variant-numeric: tabular-nums; }
+.arrange-item.off .arrange-name { opacity: .5; }
+.grip { border: 0; background: none; padding: 0; width: 44px; height: 44px; justify-content: center; color: var(--muted);
+  cursor: grab; touch-action: none; flex: none; }
+.grip:hover { color: var(--text); }
+.grip .icon { width: 22px; height: 22px; fill: currentColor; }
+.arrange-label { flex: 1; min-width: 0; display: flex; align-items: center; gap: 12px; padding: 10px 0; cursor: pointer; font-weight: 400; }
+.arrange-label input { width: 18px; height: 18px; flex: none; margin: 0; }
+.arrange-name { display: flex; flex-direction: column; min-width: 0; }
+.arrange-name strong { font-family: var(--serif); font-size: 1.15rem; font-weight: 500; overflow: hidden; text-overflow: ellipsis;
+  white-space: nowrap; }
+.arrange-name small { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; font-size: .82rem; }
+.arrange-name small .badge { font-size: inherit; }
+.nudges { display: flex; flex: none; }
+.nudge { border: 0; background: none; color: var(--muted); width: 40px; height: 44px; justify-content: center; padding: 0; font-size: 1.05rem; }
+.nudge:hover { color: var(--text); }
+.arrange-list.sorting { user-select: none; -webkit-user-select: none; }
+.arrange-list.sorting .grip { cursor: grabbing; }
+.arrange-item.dragging { z-index: 2; border-top: 1px solid var(--rule); border-bottom-color: var(--rule);
+  box-shadow: 0 10px 28px rgba(0, 0, 0, .14); }
+.arrange-item.moved { animation: moved 1s ease-out; }
+@keyframes moved { from { background: var(--accent-soft); } to { background: var(--bg); } }
+.arrange-foot { margin-top: 20px; }
+@media (max-width: 760px) { .nudges { display: none; } }
+
+/* pull to refresh: a quiet line that opens above the timeline as you pull */
+html.pull-page, html.pull-page body { overscroll-behavior-y: contain; }
+.ptr { height: 0; overflow: hidden; display: flex; align-items: flex-end; justify-content: center; color: var(--muted);
+  transition: height .2s ease; }
+.ptr.pulling { transition: none; }
+.ptr-inner { display: flex; align-items: center; gap: 8px; padding-bottom: 16px; font: italic 1rem/1 var(--serif); }
+.ptr-arrow { display: inline-flex; transition: transform .15s ease; }
+.ptr.ready .ptr-arrow { transform: rotate(180deg); color: var(--accent); }
+.ptr.ready .ptr-label { color: var(--text); }
+.ptr .spinner { display: none; }
+.ptr.refreshing .spinner { display: inline-block; }
+.ptr.refreshing .ptr-arrow { display: none; }

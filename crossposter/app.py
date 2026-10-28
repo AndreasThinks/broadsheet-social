@@ -9,11 +9,12 @@ import logging
 import shutil
 import tempfile
 import time
+from dataclasses import dataclass
 from pathlib import Path
 from urllib.parse import quote, urlencode
 
 from fasthtml.common import (A, Beforeware, Button, Code, Details, Div, Form, H1, H2, H3, Hidden, Input, Label, Li,
-                             Link, Meta, Option, P, Pre, Script, Section, Select, Small, Span, Strong, Summary, Textarea,
+                             Link, Meta, Ol, Option, P, Pre, Script, Section, Select, Small, Span, Strong, Summary, Textarea,
                              Ul, fast_app)
 from starlette.responses import FileResponse, JSONResponse, RedirectResponse, Response
 
@@ -27,7 +28,7 @@ from .crypto import app_secret
 from .db import DB
 from .models import Notification
 from .richtext import length_for
-from .ui import (NETWORK_LABELS, safe, account_chip, avatar, badge, error_box, load_more, notification_row, page, post_card,
+from .ui import (NETWORK_LABELS, safe, account_chip, avatar, badge, error_box, icon, load_more, notification_row, page, post_card,
                  profile_url)
 
 log = logging.getLogger("crossposter")
@@ -193,35 +194,65 @@ async def get(feed: str = "", acct: str = "", custom: str = ""):
             A("Connect an account", href="/settings#accounts", cls="button primary"), cls="panel"))
     if not feed and not custom:
         custom = "combined"
-    tabs = []
     current = None
-    for lf in visible_feeds(include=custom):
-        name = lf.feed.name if lf.feed else lf.slug
-        current = lf if custom == lf.slug else current
-        tabs.append(A(name, href=f"/?custom={lf.slug}", cls="tab" + (" active" if custom == lf.slug else ""),
-                      title=(lf.feed.description if lf.feed else "") or "Custom feed"))
+    tabs = []
+    for t in await home_tabs(accts):
+        active = (t.lf is not None and custom == t.lf.slug) or (t.lf is None and not custom and (feed, acct) == t.native)
+        current = t.lf if active and t.lf else current
+        if t.visible or active:
+            tabs.append(A(*([badge(t.networks[0])] if t.lf is None else []), t.name, href=t.href,
+                          cls="tab" + (" active" if active else ""), title=t.about or None))
+    tabs.append(A("Arrange", href="/feeds/arrange", cls="tab more-tab", title="Reorder, show or hide these tabs"))
+    tabs.append(A("All feeds…", href="/feeds", cls="tab more-tab"))
+    src = ("/timeline?" + urlencode({"custom": custom}) if custom
+           else "/timeline?" + urlencode({"feed": feed, "acct": acct}))
+    # Pulling down at the top of the page re-fetches this (custom feeds re-rank from fresh posts).
+    again = ("/timeline?" + urlencode({"custom": custom, "fresh": 1}) if custom else src)
+    return shell("Read", Div(*tabs, cls="tabs"), feed_header(current) if current else None,
+                 Div(Div(Span(cls="spinner"), "Loading", cls="more"), hx_get=src, hx_trigger="load", cls="timeline",
+                     data_refresh=again),
+                 aside=home_aside(accts))
+
+
+@dataclass
+class HomeTab:
+    key: str                  # a custom feed's slug, or native_key() for a network's own feed
+    name: str
+    href: str
+    networks: list
+    visible: bool
+    default_visible: bool     # custom feeds and feeds pinned on the network show unless you hide them
+    about: str = ""
+    lf: object = None         # the custom feed, if it is one
+    native: tuple = ()        # (source, account id), if it's a network's own feed
+
+
+def native_key(account_id: str, source: str) -> str:
+    return f"native|{account_id}|{source}"
+
+
+async def home_tabs(accts=None) -> list[HomeTab]:
+    """Every feed that can be a tab on Home, in your chosen order, each marked shown or hidden."""
+    accts = accounts() if accts is None else accts
+    prefs = db.get("feed_prefs", {})
+    hidden, shown = set(prefs.get("hidden") or []), set(prefs.get("shown") or [])
+    tabs = []
+    for lf in feeds.all_feeds():
+        f = lf.feed
+        nets = list(dict.fromkeys(s.split(":", 1)[0] for s in f.sources)) if f else []
+        tabs.append(HomeTab(lf.slug, f.name if f else lf.slug, f"/?custom={lf.slug}", nets, lf.slug not in hidden, True,
+                            (f.description if f else "") or "Custom feed", lf=lf))
     multi = {}
     for a in accts:
         multi[a.network] = multi.get(a.network, 0) + 1
     for a in accts:
         for f in await native_feeds(a):
-            if not f.pinned and not (feed == f.source and acct == a.account_id):
-                continue
+            key = native_key(a.account_id, f.source)
             label = f.name + (f" · {a.rec.handle}" if multi[a.network] > 1 else "")
-            tabs.append(A(badge(a.network), label, href="/?" + urlencode({"feed": f.source, "acct": a.account_id}),
-                          cls="tab" + (" active" if (feed == f.source and acct == a.account_id) else "")))
-    tabs.append(A("All feeds…", href="/feeds", cls="tab more-tab"))
-    src = ("/timeline?" + urlencode({"custom": custom}) if custom
-           else "/timeline?" + urlencode({"feed": feed, "acct": acct}))
-    return shell("Read", Div(*tabs, cls="tabs"), feed_header(current) if current else None,
-                 Div(Div(Span(cls="spinner"), "Loading", cls="more"), hx_get=src, hx_trigger="load", cls="timeline"),
-                 aside=home_aside(accts))
-
-
-def visible_feeds(include: str = "") -> list:
-    """Custom feeds in your chosen order, minus the ones hidden from Home (unless it's the one being viewed)."""
-    ordered, hidden = feeds.arrange(feeds.all_feeds(), db.get("feed_prefs", {}))
-    return [lf for lf in ordered if lf.slug not in hidden or lf.slug == include]
+            tabs.append(HomeTab(key, label, "/?" + urlencode({"feed": f.source, "acct": a.account_id}), [a.network],
+                                key in shown or (f.pinned and key not in hidden), f.pinned,
+                                f"{NETWORK_LABELS.get(a.network, a.network)} · {a.rec.handle}", native=(f.source, a.account_id)))
+    return feeds.arrange(tabs, prefs, key=lambda t: t.key)[0]
 
 
 def feed_header(lf):
@@ -686,7 +717,7 @@ async def get(only: str = ""):
                A("Replies and mentions", href="/notifications?only=replies", cls="tab" + (" active" if only else "")),
                cls="tabs")
     body = [notification_row(n) for n in items] or [Div("No notifications yet.", cls="empty")]
-    return shell("Notifications", H2("Notifications", cls="page-title"), tabs, Div(*body, cls="notifs"),
+    return shell("Notifications", H2("Notifications", cls="page-title"), tabs, Div(*body, cls="notifs", data_refresh="reload"),
                  active="/notifications")
 
 
@@ -702,12 +733,10 @@ async def _refresh_notifications():
 
 # ---------- custom feeds ----------
 
-def feed_card(lf, hidden: bool = False, first: bool = False, last: bool = False):
+def feed_card(lf, hidden: bool = False):
     f = lf.feed
     slug = lf.slug
     nets = list(dict.fromkeys(s.split(":", 1)[0] for s in f.sources)) if f else []
-    move = lambda arrow, label, step, off: Form(Button(arrow, cls="small", disabled=off, title=label, aria_label=label),
-                                                method="post", action=f"/feeds/{slug}/move?step={step}")
     return Section(
         Div(Div(H3(f.name if f else slug), *[badge(n) for n in nets], cls="feed-title"),
             Small(f"{slug}.py" if lf.path else "built in", cls="muted"), cls="feed-head"),
@@ -720,7 +749,6 @@ def feed_card(lf, hidden: bool = False, first: bool = False, last: bool = False)
               title="Start a new feed from this one"),
             Form(Button("Show on Home" if hidden else "Hide from Home", cls="small"),
                  method="post", action=f"/feeds/{slug}/visibility"),
-            move("↑", "Move up", -1, first), move("↓", "Move down", 1, last),
             Form(Button("Remove", cls="small danger"), method="post", action=f"/feeds/{slug}/remove",
                  onsubmit=f"return confirm({json.dumps(f'Remove {f.name if f else slug}? The file is kept as _removed_{slug}.py.')})")
             if lf.path else None, cls="row feed-actions"),
@@ -742,7 +770,7 @@ def starter_card(lf):
 @rt("/feeds")
 async def get():
     ordered, hidden = feeds.arrange(feeds.all_feeds(), db.get("feed_prefs", {}))
-    cards = [feed_card(lf, lf.slug in hidden, i == 0, i == len(ordered) - 1) for i, lf in enumerate(ordered)]
+    cards = [feed_card(lf, lf.slug in hidden) for lf in ordered]
     starters = [starter_card(lf) for lf in feeds.starter_feeds() if lf.feed]
     native = []
     for a in accounts():
@@ -752,9 +780,10 @@ async def get():
             for f in fs])))
     return shell("Feeds", H2("Your custom feeds", cls="page-title"),
                  P("Custom feeds are Python files. Each one picks posts from the sources it lists and ranks them with a ",
-                   Code("score()"), " function. Edit one here or in your editor; changes apply on save. "
-                   "The order here is the order of the tabs on Home.", cls="muted"),
-                 A("New feed", href="/feeds/new/edit", cls="button primary"), *cards,
+                   Code("score()"), " function. Edit one here or in your editor; changes apply on save.", cls="muted"),
+                 Div(A("New feed", href="/feeds/new/edit", cls="button primary"),
+                     A("Arrange tabs", href="/feeds/arrange", cls="button", title="Put your Home tabs in the order you want"),
+                     cls="row"), *cards,
                  *([H2("Add more feeds", cls="page-title"),
                     P("Ready-made feeds that ship with the app. Adding one copies it into your feeds folder so you can edit it.",
                       cls="muted"), *starters] if starters else []),
@@ -776,11 +805,40 @@ async def post(slug: str):
     return RedirectResponse(f"/feeds#{slug}", status_code=303)
 
 
-@rt("/feeds/{slug}/move")
-async def post(slug: str, step: int = 0):
-    slugs = [lf.slug for lf in feeds.arrange(feeds.all_feeds(), db.get("feed_prefs", {}))[0]]
-    _save_prefs(feeds.move(db.get("feed_prefs", {}), slugs, slug, 1 if step > 0 else -1))
-    return RedirectResponse(f"/feeds#{slug}", status_code=303)
+@rt("/feeds/arrange")
+async def get():
+    rows = []
+    for i, t in enumerate(await home_tabs()):
+        name_id = f"tab-{i}"
+        rows.append(Li(
+            Button(icon("grip"), cls="grip", type="button", title="Drag to move", aria_label=f"Move {t.name}",
+                   aria_describedby="arrange-help"),
+            Label(Input(type="checkbox", checked=t.visible, cls="arrange-show", aria_labelledby=name_id),
+                  Span(Strong(t.name, id=name_id),
+                       Small("Custom feed", *[badge(n) for n in t.networks], cls="muted") if t.lf
+                       else Small(badge(t.networks[0]), t.about.split(" · ", 1)[-1], cls="muted"),
+                       cls="arrange-name"), cls="arrange-label"),
+            Span(Button("↑", type="button", cls="nudge", data_step="-1", title="Move up", aria_label=f"Move {t.name} up"),
+                 Button("↓", type="button", cls="nudge", data_step="1", title="Move down", aria_label=f"Move {t.name} down"),
+                 cls="nudges"),
+            cls="arrange-item" + ("" if t.visible else " off"), data_key=t.key))
+    return shell("Arrange tabs", H2("Arrange your tabs", cls="page-title"),
+                 P("Drag a feed by its handle to put your Home tabs in the order you want. Untick a feed to keep it "
+                   "off Home. Changes save as you go.", cls="muted", id="arrange-help"),
+                 Ol(*rows, id="arrange", cls="arrange-list"),
+                 Div(A("Done", href="/", cls="button primary"), Span(id="arrange-status", cls="muted", aria_live="polite"),
+                     cls="row arrange-foot"), active="/feeds")
+
+
+@rt("/feeds/arrange")
+async def post(req):
+    body = await req.json()
+    known = {t.key: t for t in await home_tabs()}
+    chosen = [(row["key"], bool(row.get("visible")), known[row["key"]].default_visible)
+              for row in body.get("tabs") or [] if row.get("key") in known]
+    chosen += [(k, t.visible, t.default_visible) for k, t in known.items() if k not in {c[0] for c in chosen}]
+    _save_prefs(feeds.save_arrangement(db.get("feed_prefs", {}), chosen, set(known)))
+    return JSONResponse({"ok": True})
 
 
 @rt("/feeds/{slug}/remove")
