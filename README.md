@@ -53,11 +53,11 @@ or later for web app notifications.
 
 ## Desktop and Android apps
 
-Download from **https://andreasthinks.github.io/cross-poster-/**. The apps run the same app entirely on your device: your accounts, feeds and database live in your user data folder (`%APPDATA%\Cross-poster` on Windows, `~/Library/Application Support/Cross-poster` on macOS, the app's private storage on Android). They don't use the Railway server or any other server of ours.
+Download from **https://broadsheet-feeds-production.up.railway.app/**. The apps run the same app entirely on your device: your accounts, feeds and database live in your user data folder (`%APPDATA%\Cross-poster` on Windows, `~/Library/Application Support/Cross-poster` on macOS, the app's private storage on Android). That website only hands out the apps, their updates and the community feeds; your data never goes through it or any other server of ours.
 
 The builds aren't signed with a paid certificate yet, so the first time you open it macOS needs right-click → Open, Windows needs "More info → Run anyway", and Android needs you to allow installs from your browser.
 
-**Desktop updates follow `main`.** Every push to `main` publishes a small bundle of the app code to GitHub Pages (`.github/workflows/apps.yml`). The desktop app checks for it after opening, downloads it quietly, and uses it the next time you open the app. If an update fails to start, the app goes back to the previous version and never tries that one again. When an update needs new libraries, the app asks you to download the new version instead. How it works is in `crossposter_desktop/updater.py`.
+**Desktop updates follow `main`.** Every push to `main` builds the apps and uploads them, with a small bundle of the app code, to the website (`.github/workflows/apps.yml`, `directory/releases.py`). The upload proves it comes from `main` with GitHub's OIDC token, so no password is involved. The desktop app checks for it after opening, downloads it quietly, and uses it the next time you open the app. If an update fails to start, the app goes back to the previous version and never tries that one again. When an update needs new libraries, the app asks you to download the new version instead. How it works is in `crossposter_desktop/updater.py`.
 
 **Android** (`android/`) is a small Kotlin shell around the same Python app, using [Chaquopy](https://chaquo.com/chaquopy/). A background job checks for notifications about every 15 minutes while the app is closed. Install new versions over the old one, or point [Obtainium](https://obtainium.imranr.dev/) at the download page. APKs are signed with a shared debug key committed in `android/` so updates install cleanly; set the `ANDROID_KEYSTORE_*` variables in CI to sign with a private key instead (users would need to reinstall once).
 
@@ -135,7 +135,9 @@ Settings › Privacy shows the exact report and turns it off. The directory fold
 weekly totals and discards it, keeps no IP addresses, and shows a figure only once 10 apps report it.
 
 The directory itself is `directory/` (FastHTML + SQLite), deployed as its own Railway service from
-`directory/Dockerfile` with a volume at `/data`. `ADMIN_PASSWORD` opens the review queue at `/review`.
+`directory/Dockerfile` with a volume at `/data`. The same site is Broadsheet's home page and serves the downloads.
+The apps used to be on GitHub Pages; `.github/workflows/pages-forward.yml` turns that into a forwarding site so
+desktop apps installed from there move over on their next update. `ADMIN_PASSWORD` opens the review queue at `/review`.
 Run it locally with `HTTPS=0 ADMIN_PASSWORD=pw python -m directory.app` (port 5002) and point the app
 at it with `DIRECTORY_URL=http://127.0.0.1:5002`.
 

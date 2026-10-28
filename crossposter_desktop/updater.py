@@ -1,7 +1,7 @@
 """Keep the desktop app's code in step with main, without reinstalling.
 
 On each launch the app runs the newest code it has: either the code it shipped with, or a newer bundle
-it downloaded earlier into <data>/updates/ from the project's GitHub Pages site. After the window is up it checks the release manifest, and
+it downloaded earlier into <data>/updates/ from Broadsheet's website. After the window is up it checks the release manifest, and
 if there's newer code it downloads it for next time. If the new code needs libraries this shell doesn't
 have, it reports that a new download of the app is needed instead.
 
@@ -23,16 +23,18 @@ from pathlib import Path
 
 import httpx
 
-from .release import SITE
+from .release import UPDATE_URL
 
 log = logging.getLogger("crossposter.desktop")
 
-DEFAULT_URL = SITE + "desktop/"  # GitHub Pages, published by .github/workflows/apps.yml
+DEFAULT_URL = UPDATE_URL  # published by .github/workflows/apps.yml
 MAX_BUNDLE_BYTES = 50 * 1024 * 1024
 
 
-def update_url() -> str:
-    return os.environ.get("CROSSPOSTER_UPDATE_URL", DEFAULT_URL).rstrip("/") + "/"
+def update_url(updates: Path | None = None) -> str:
+    """Where to look: an override for testing, else where the last manifest said the site has moved to."""
+    moved = _state(updates).get("update_url") if updates else None
+    return os.environ.get("CROSSPOSTER_UPDATE_URL", moved or DEFAULT_URL).rstrip("/") + "/"
 
 
 def read_info(code_dir: Path) -> dict:
@@ -117,12 +119,16 @@ def check(bundled: Path, updates: Path, running: Path, client: httpx.Client | No
     shipped = read_info(bundled)
     have = max(shipped.get("build", 0), read_info(running).get("build", 0))
     state = _state(updates)
-    base = update_url()
+    base = update_url(updates)
     own_client = client is None
     client = client or httpx.Client(timeout=20, follow_redirects=True)
     try:
         manifest = client.get(base + "manifest.json").raise_for_status().json()
         build = int(manifest["build"])
+        moved = manifest.get("update_url")
+        if moved and moved.startswith("https://") and moved.rstrip("/") + "/" != base:
+            state["update_url"] = moved
+            _save_state(updates, state)
         page = manifest.get("page", "")
         if build <= have or str(build) in state.get("bad", []):
             return Result("current")

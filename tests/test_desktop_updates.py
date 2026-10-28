@@ -118,3 +118,35 @@ def test_bad_build_goes_back_to_the_previous_download(env):
     assert broken.name == "300"
     updater.mark_bad(u, broken)
     assert updater.choose_code_dir(b, u) == good
+
+
+@respx.mock
+def test_follows_the_site_when_it_moves(env, monkeypatch):
+    monkeypatch.delenv("CROSSPOSTER_UPDATE_URL")
+    b, u = env["bundled"], env["updates"]
+    new = "https://new.example.com/desktop/"
+    respx.get(updater.DEFAULT_URL + "manifest.json").respond(json=env["manifest"] | {"update_url": new})
+    respx.get(updater.DEFAULT_URL + release.BUNDLE_NAME).respond(content=(env["out"] / release.BUNDLE_NAME).read_bytes())
+    assert updater.check(b, u, b).status == "staged"
+    assert updater.update_url(u) == new
+    respx.get(new + "manifest.json").respond(json=env["manifest"] | {"update_url": new})
+    assert updater.check(b, u, updater.choose_code_dir(b, u)).status == "current"
+
+
+def test_manifest_names_the_website(env):
+    assert env["manifest"]["update_url"] == release.UPDATE_URL and "github.io" not in release.UPDATE_URL
+
+
+def test_apps_from_the_github_pages_days_are_pointed_at_the_website(monkeypatch):
+    from crossposter import config
+    monkeypatch.setattr(config.settings, "desktop", True)
+    monkeypatch.setenv("CROSSPOSTER_UPDATE_URL", "x")
+    monkeypatch.delenv("CROSSPOSTER_UPDATE_URL")
+    monkeypatch.setattr(updater, "DEFAULT_URL", "https://andreasthinks.github.io/cross-poster-/desktop/")
+    config._point_old_desktop_apps_at_new_site()
+    assert updater.update_url() == "https://broadsheet-feeds-production.up.railway.app/desktop/"
+
+    monkeypatch.delenv("CROSSPOSTER_UPDATE_URL")
+    monkeypatch.setattr(updater, "DEFAULT_URL", release.UPDATE_URL)   # a current app is left alone
+    config._point_old_desktop_apps_at_new_site()
+    assert "CROSSPOSTER_UPDATE_URL" not in __import__("os").environ

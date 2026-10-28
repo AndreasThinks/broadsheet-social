@@ -50,3 +50,20 @@ class Settings:
 
 
 settings = Settings()
+
+
+def _point_old_desktop_apps_at_new_site() -> None:
+    """Desktop apps installed before the downloads moved off GitHub Pages look there for updates, and their updater
+    only changes with a new download. This code reaches them as one of those updates, so it points them at the new site.
+    Newer apps follow the manifest's update_url instead."""
+    if not settings.desktop or "CROSSPOSTER_UPDATE_URL" in os.environ:
+        return
+    try:
+        from crossposter_desktop import updater
+    except ImportError:
+        return
+    if "github.io" in getattr(updater, "DEFAULT_URL", ""):
+        os.environ["CROSSPOSTER_UPDATE_URL"] = "https://broadsheet-feeds-production.up.railway.app/desktop/"
+
+
+_point_old_desktop_apps_at_new_site()

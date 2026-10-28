@@ -1,7 +1,7 @@
 name: apps
 # Builds the desktop (Windows, macOS) and Android apps. On every push to main it also publishes them to
-# GitHub Pages: the download page, the installers, and the app-code bundle installed desktop apps update
-# themselves from. Railway isn't involved.
+# Broadsheet's website (directory/ on Railway): the installers, and the app-code bundle installed desktop apps
+# update themselves from. The upload proves where it came from with a GitHub OIDC token (directory/releases.py).
 on:
   push:
     branches: [main]
@@ -10,7 +10,6 @@ on:
 
 permissions:
   contents: write
-  pages: write
   id-token: write
 
 concurrency:
@@ -135,34 +134,39 @@ jobs:
     if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
     needs: [bundle, desktop, android]
     runs-on: ubuntu-latest
-    environment:
-      name: github-pages
-      url: ${{ steps.deploy.outputs.page_url }}
     env:
+      SITE: https://broadsheet-feeds-production.up.railway.app
       GH_TOKEN: ${{ github.token }}
       GH_REPO: ${{ github.repository }}
     steps:
-      - uses: actions/checkout@v4
       - uses: actions/download-artifact@v4
         with:
           path: out
           merge-multiple: true
-      - name: Assemble the site
+      - name: Wait for the website to be up
+        # If this push also changed the site, Railway may still be deploying it.
         run: |
-          mkdir -p site/desktop site/downloads
-          cp site-src/* site/
-          cp out/manifest.json out/crossposter-app.zip site/desktop/
-          cp out/Broadsheet-windows.zip out/Broadsheet-macos.zip out/Broadsheet-android.apk site/downloads/
-          sed -i "s/{{COMMIT}}/${GITHUB_SHA::7}/; s/{{DATE}}/$(date -u +'%-d %B %Y')/" site/index.html
+          for i in $(seq 60); do
+            curl -fsS "$SITE/api/releases" >/dev/null && exit 0
+            sleep 15
+          done
+          echo "The website isn't answering at $SITE"; exit 1
+      - name: Upload to the website
+        run: |
+          token() {
+            curl -fsS -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
+              "$ACTIONS_ID_TOKEN_REQUEST_URL&audience=broadsheet-releases" | jq -r .value
+          }
+          for f in Broadsheet-windows.zip Broadsheet-macos.zip Broadsheet-android.apk crossposter-app.zip manifest.json; do
+            echo "Uploading $f ($(du -h "out/$f" | cut -f1))"
+            curl -fsS --retry 4 --retry-all-errors -X PUT -H "Authorization: Bearer $(token)" \
+              -H "Content-Type: application/octet-stream" --data-binary "@out/$f" "$SITE/api/releases/$GITHUB_SHA/$f"
+            echo
+          done
+          curl -fsS --retry 4 --retry-all-errors -X POST -H "Authorization: Bearer $(token)" "$SITE/api/releases/$GITHUB_SHA/publish"
       - name: Attach to the desktop-latest GitHub release
         run: |
           gh release view desktop-latest >/dev/null 2>&1 || \
-            gh release create desktop-latest --title "Broadsheet apps" --notes "Downloads: https://andreasthinks.github.io/cross-poster-/" --target "$GITHUB_SHA"
+            gh release create desktop-latest --title "Broadsheet apps" --notes "Downloads: $SITE/" --target "$GITHUB_SHA"
           gh release upload desktop-latest out/Broadsheet-windows.zip out/Broadsheet-macos.zip out/Broadsheet-android.apk out/crossposter-app.zip --clobber
           gh release upload desktop-latest out/manifest.json --clobber
-      - uses: actions/configure-pages@v5
-      - uses: actions/upload-pages-artifact@v3
-        with:
-          path: site
-      - id: deploy
-        uses: actions/deploy-pages@v4
