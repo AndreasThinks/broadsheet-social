@@ -14,6 +14,7 @@ from __future__ import annotations
 import ast
 import hmac
 import json
+import math
 import os
 import secrets
 from datetime import datetime
@@ -22,7 +23,7 @@ from urllib.parse import urlencode
 
 from fasthtml.common import (A, Article, Button, Code, Details, Div, Footer, Form, H1, H2, H3, Header, Input, Label, Li,
                              Link, Main, Meta, Nav, Noscript, NotStr, Ol, Option, P, Pre, Script, Section, Select, Span, Strong,
-                             Summary, Table, Tbody, Td, Textarea, Th, Thead, Title, Tr, Ul, fast_app)
+                             Summary, Table, Tbody, Td, Template, Textarea, Th, Thead, Title, Tr, Ul, fast_app)
 from starlette.concurrency import run_in_threadpool
 from starlette.requests import Request
 from starlette.responses import FileResponse, JSONResponse, RedirectResponse, Response
@@ -176,20 +177,86 @@ const mine = os && document.querySelector(`.platform[data-os="${os}"]`);
 if (mine) { mine.classList.add("mine"); mine.parentNode.prepend(mine); }""" % json.dumps(OS_NAMES))
 
 
+NET_ICONS = {
+    "bluesky": '<svg viewBox="0 0 24 24"><path fill="currentColor" d="M6.3 4.4c2.2 1.6 4.6 5 5.7 6.8 1.1-1.8 3.5-5.2 5.7-6.8 '
+               '1.6-1.2 4.3-2.1 4.3.8 0 .6-.3 4.9-.5 5.6-.7 2.4-3.2 3-5.4 2.7 3.9.7 4.9 2.9 2.8 5.1-4 4.1-5.8-1-6.2-2.4L12 '
+               '14.3l-.7 1.9c-.4 1.4-2.2 6.5-6.2 2.4-2.1-2.2-1.1-4.4 2.8-5.1-2.2.3-4.7-.3-5.4-2.7C2.3 10.1 2 5.8 2 5.2c0-2.9 '
+               '2.7-2 4.3-.8z"/></svg>',
+    "mastodon": '<svg viewBox="0 0 24 24"><path fill="currentColor" d="M4 4.5h16a1.5 1.5 0 0 1 1.5 1.5v9a4 4 0 0 1-4 4H9.5L5 '
+                '22v-3.2A2 2 0 0 1 2.5 17V6A1.5 1.5 0 0 1 4 4.5z"/><path class="m" fill="none" stroke-width="2.4" '
+                'stroke-linecap="round" d="M7.5 15V10a2.25 2.25 0 0 1 4.5 0v3M12 10a2.25 2.25 0 0 1 4.5 0v5"/></svg>',
+    "x": '<svg viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-width="3.2" stroke-linecap="round" '
+         'd="M5 4l14 16M19 4L5 20"/></svg>',
+}
+# Made-up people for the front-page picture: name, networks (first is where the post arrives first), when, replies, likes,
+# drawn face (background, skin, hair, shirt, hair style), text. The first three are on screen; the rest arrive one by one.
+PICTURE_POSTS = (
+    ("Priya Raman", ("bluesky", "mastodon"), "12m", 4, 48, ("#cfe0fb", "#a86b4c", "#1f1a17", "#2f5d8a", "long"),
+     "New chart: solar's share of global electricity passed 9% this year, faster than any forecast from 2015."),
+    ("Tom Ellery", ("mastodon",), "40m", 7, 31, ("#e3defb", "#f0c9a8", "#8a5a2b", "#5a4f8f", "short"),
+     "Every service form should start by asking what you're trying to do, then ask only what that needs."),
+    ("Jo Mensah", ("bluesky",), "1h", 2, 19, ("#fbe3cf", "#6b4130", "#1a1311", "#b4532a", "curly"),
+     "Writing up this week's newsletter now. Shorter than usual, which is good news for everyone."),
+    ("Sam Okafor", ("x",), "now", 3, 12, ("#e6e6e6", "#5a3a2a", "#141010", "#2b2b2b", "beard"),
+     "Train is 20 minutes late, which finally gives me time to read the transport white paper."),
+    ("Aiko Tanaka", ("bluesky", "mastodon"), "now", 6, 40, ("#fde2e4", "#f1cfae", "#26201d", "#a83f5a", "long"),
+     "Spent the morning in the archive. Found a 1952 bus timetable with better typography than anything we ship today."),
+    ("Lena Fischer", ("mastodon",), "now", 5, 22, ("#dff3e6", "#f3d3b8", "#c99a4a", "#2f7a55", "bun"),
+     "Our open data portal has an API now. The docs are short and the rate limits are generous."),
+    ("Marcus Hale", ("x",), "now", 9, 27, ("#fff1c9", "#e9b994", "#6b6b6b", "#3f5b3a", "bald"),
+     "Most dashboards should be a sentence."),
+    ("Nadia Costa", ("bluesky", "x"), "now", 3, 35, ("#efe2fb", "#d6a07c", "#3b2416", "#6b3fa0", "curly"),
+     "Small win: the bike lane on Mill Road finally connects to the station."),
+    ("Dev Patel", ("mastodon",), "now", 1, 16, ("#d9f0f5", "#9a6447", "#191414", "#1f6f80", "short"),
+     "Reminder that the library lends out tools now. I borrowed a drill and a moisture meter."),
+    ("Ruth Adeyemi", ("x",), "now", 2, 21, ("#fde7d6", "#4e3024", "#120d0b", "#c0702f", "bun"),
+     "Writing documentation is just future you leaving notes for confused you."),
+)
+
+
+def face(bg, skin, hair, shirt, style):
+    """A small drawn portrait, so the picture has faces without photos of anyone real."""
+    back = cap = extra = ""
+    if style == "long":
+        back = f'<rect x="10" y="8.5" width="20" height="24" rx="10" fill="{hair}"/>'
+    if style == "bun":
+        back = f'<circle cx="20" cy="7.4" r="3.8" fill="{hair}"/>'
+    if style == "curly":
+        cap = "".join(f'<circle cx="{20 + 7.6 * math.cos(math.radians(a)):.1f}" cy="{17 + 7.6 * math.sin(math.radians(a)):.1f}" '
+                      f'r="3.3" fill="{hair}"/>' for a in (200, 225, 250, 270, 290, 315, 340))
+    elif style != "bald":
+        cap = f'<circle cx="20" cy="15.8" r="8.4" fill="{hair}"/>'
+    if style == "beard":
+        extra = f'<path d="M12.6 18.5Q20 31 27.4 18.5Q20 23.5 12.6 18.5Z" fill="{hair}"/>'
+    return Span(NotStr(f'<svg viewBox="0 0 40 40"><rect width="40" height="40" fill="{bg}"/>{back}'
+                       f'<path d="M5 41Q6 28.5 20 28.5Q34 28.5 35 41Z" fill="{shirt}"/>'
+                       f'<rect x="17" y="22" width="6" height="7" fill="{skin}"/>{cap}'
+                       f'<circle cx="20" cy="18" r="7.6" fill="{skin}"/>{extra}</svg>'), cls="pic-face")
+
+
+def picture_post(name, nets, when, replies, likes, look, text, arriving=False):
+    """One post in the picture. An arriving cross-post starts on its first network; home.js adds the rest."""
+    shown = nets[:1] if arriving else nets
+    return Div(Div(Span(face(*look), Span(*[Span(NotStr(NET_ICONS[k]), cls=f"pic-badge {k}") for k in shown], cls="pic-badges"),
+                        cls="pic-av"),
+                   Div(Div(Strong(name), Span(f" · {when}"), cls="pic-who"), P(text),
+                       P(f"Also on {' and '.join(NETS[k] for k in nets[1:])} · shown once", cls="pic-also",
+                         hidden=arriving or None) if len(nets) > 1 else None,
+                       Div(Span(*[x for k in shown for x in (" + ", Span(NETS[k], cls=f"net-{k}"))][1:], cls="pic-nets"),
+                           Span("↩ ", Span(replies)), Span("♥ ", Span(likes, cls="pic-likes")), cls="pic-meta")),
+                   cls="pic-post"),
+               cls="pic-slot", data_nets=" ".join(nets) if arriving and len(nets) > 1 else None)
+
+
 def app_picture():
-    """A drawing of the reading view, with made-up people, so the front page shows what Broadsheet looks like."""
-    posts = (("bluesky", "Priya Raman", "12m", "New chart: solar's share of global electricity passed 9% this year, faster "
-              "than any forecast from 2015.", "Also on Mastodon · 3 people you follow shared this link"),
-             ("mastodon", "Tom Ellery", "40m", "Every service form should start by asking what you're trying to do, then "
-              "ask only what that needs.", None),
-             ("bluesky", "Jo Mensah", "1h", "Writing up this week's newsletter now. Shorter than usual, which is good news "
-              "for everyone.", None))
+    """A drawing of the reading view, with made-up people, so the front page shows what Broadsheet looks like. home.js keeps
+    it ticking over: new posts arrive from the queue, likes count up, and a post seen on a second network folds into one."""
     return Div(Div(Strong("Broadsheet"), Span("Read", cls="on"), Span("Activity"), Span("Feeds"), cls="pic-bar"),
                Div(Span("Following", cls="on"), Span("Across networks"), Span("Links worth reading"), Span("Quiet posters"),
                    cls="pic-tabs"),
-               *[Div(Span(cls=f"pic-av {net}"),
-                     Div(Div(Strong(who), Span(f" · {when}"), cls="pic-who"), P(text), P(also, cls="pic-also") if also else None),
-                     cls="pic-post") for net, who, when, text, also in posts],
+               Div(cls="pic-pill"),
+               Div(*[picture_post(*p) for p in PICTURE_POSTS[:3]], cls="pic-feed"),
+               Template(*[picture_post(*p, arriving=True) for p in PICTURE_POSTS[3:]], cls="pic-queue"),
                cls="app-picture", aria_hidden="true")
 
 
@@ -231,7 +298,7 @@ def get(session):
         Section(H2("From the community"),
                 Div(*[feed_card(f, cta=False) for f in top], cls="feed-cards three-up") if top else None,
                 P(A("All community feeds →", href="/feeds")), cls="block") if top else None,
-        cls="home-body"), PICK_OS, active="/", session=session, main_cls="home")
+        cls="home-body"), PICK_OS, Script(src="/static/home.js", defer=True), active="/", session=session, main_cls="home")
 
 
 @rt("/download")
