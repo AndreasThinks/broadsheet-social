@@ -60,17 +60,28 @@ jobs:
         env:
           CROSSPOSTER_DESKTOP_DATA: ${{ runner.temp }}\cp-smoke
         run: |
-          # Mark every file as downloaded from the internet, as unzipping a download in Explorer does.
-          Get-ChildItem "dist\Broadsheet" -Recurse -File | ForEach-Object {
+          # Mark every file as downloaded from the internet, as unzipping a download in Explorer does. The exe
+          # itself is left unmarked: running a marked exe opens Windows' "are you sure" prompt, which a user clicks
+          # through but would hang CI.
+          $exe = (Resolve-Path "dist\Broadsheet\Broadsheet.exe").Path
+          $runtime = Get-ChildItem "dist\Broadsheet" -Recurse -Filter Python.Runtime.dll | Select-Object -First 1
+          Get-ChildItem "dist\Broadsheet" -Recurse -File | Where-Object FullName -ne $exe | ForEach-Object {
             Set-Content -LiteralPath $_.FullName -Stream Zone.Identifier -Value "[ZoneTransfer]`r`nZoneId=3"
           }
+          if (-not (Get-Item -LiteralPath $runtime.FullName -Stream Zone.Identifier -ErrorAction SilentlyContinue)) {
+            Write-Error "couldn't mark $($runtime.FullName)"; exit 1
+          }
+          Write-Output "Marked the build's files as downloaded"
           # A crash in the windowed app opens an error dialog and waits, so give up after three minutes.
-          $p = Start-Process -FilePath "dist\Broadsheet\Broadsheet.exe" -ArgumentList "--smoke" -PassThru
+          $p = Start-Process -FilePath $exe -ArgumentList "--smoke" -PassThru
           $null = $p.Handle  # keeps ExitCode readable after the wait
           $done = $p.WaitForExit(180000)
           Get-Content "$env:CROSSPOSTER_DESKTOP_DATA\desktop.log" -ErrorAction SilentlyContinue
           if (-not $done) { $p.Kill(); Write-Error "Broadsheet.exe didn't finish the smoke test (crashed?)"; exit 1 }
           if ($p.ExitCode -ne 0) { exit $p.ExitCode }
+          if (Get-Item -LiteralPath $runtime.FullName -Stream Zone.Identifier -ErrorAction SilentlyContinue) {
+            Write-Error "the app didn't clear the download flag from $($runtime.Name)"; exit 1
+          }
           Compress-Archive -Path "dist\Broadsheet" -DestinationPath "Broadsheet-windows.zip"
       - name: Smoke test (macOS)
         if: matrix.platform == 'macos'
