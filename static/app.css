@@ -313,3 +313,53 @@ html.pull-page, html.pull-page body { overscroll-behavior-y: contain; }
 .ptr .spinner { display: none; }
 .ptr.refreshing .spinner { display: inline-block; }
 .ptr.refreshing .ptr-arrow { display: none; }
+
+/* community feeds: browse, add, share and the anonymous stats question */
+.tabs.feeds-subnav { position: static; border-bottom: 1px solid var(--line); margin-top: 8px; }
+.kicker { margin: 18px 0 0; font: 600 .75rem/1.2 var(--sans); letter-spacing: .08em; text-transform: uppercase; color: var(--muted); }
+.kicker + .page-title { margin-top: 4px; }
+.lede { font-family: var(--serif); font-size: 1.12rem; line-height: 1.5; max-width: 620px; }
+.ok-text { color: var(--ok); font-weight: 600; } .warn-text { color: var(--warn); font-weight: 600; }
+.no-text { color: var(--danger); font-weight: 600; } .accent-text { color: var(--accent); font-weight: 600; }
+a.plain { color: var(--text); } a.plain:hover { text-decoration: none; } a.plain h3 { margin: 0; }
+.community-list { list-style: none; padding: 0; margin: 16px 0 0; border-top: 1px solid var(--rule); }
+.community-row { display: flex; gap: 16px; align-items: flex-start; padding: 16px 0; border-bottom: 1px solid var(--line); }
+.community-about { flex: 1; min-width: 0; }
+.community-about .feed-desc { margin: 4px 0 6px; }
+.community-about .badge { margin-left: 4px; }
+.community-action { display: flex; flex-direction: column; align-items: flex-end; gap: 6px; flex: none; }
+.added { color: var(--ok); font-weight: 600; }
+.notice-card { border: 1px solid var(--line); background: var(--accent-soft); border-radius: var(--radius); padding: 12px 14px; margin: 16px 0 0; }
+.notice-card p { margin: 0 0 4px; }
+.notice-card.warn { background: none; border-color: var(--warn); }
+.read-rows { list-style: none; padding: 0; margin: 8px 0 0; display: flex; flex-direction: column; gap: 6px; }
+.read-rows code { font-size: .78rem; }
+.mini-stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(110px, 1fr)); gap: 12px; }
+.mini-stats > div { display: flex; flex-direction: column; }
+.mini-stats strong { font: 500 1.5rem/1.2 var(--serif); font-variant-numeric: tabular-nums; }
+.sheet-actions { margin-top: 18px; }
+fieldset.choices { border: 0; padding: 0; margin: 0; display: flex; flex-direction: column; gap: 10px; }
+fieldset.choices legend { padding: 0; margin-bottom: 8px; }
+label.choice { display: flex; gap: 12px; align-items: flex-start; padding: 12px 14px; border: 1px solid var(--line);
+  border-radius: var(--radius); cursor: pointer; font-weight: 400; min-height: 44px; }
+label.choice:has(input:checked) { border-color: var(--text); box-shadow: inset 0 0 0 1px var(--text); }
+label.choice input { width: 20px; height: 20px; margin: 1px 0 0; accent-color: var(--ink); flex: none; }
+label.choice span { display: flex; flex-direction: column; }
+label.check { display: flex; gap: 10px; align-items: flex-start; font-weight: 400; }
+label.check input { width: 18px; height: 18px; margin: 2px 0 0; accent-color: var(--ink); flex: none; }
+.two-col { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; font-size: .9rem; margin: 12px 0; }
+.two-col ul { margin: 4px 0 0; padding-left: 18px; }
+.check-list { list-style: none; padding: 0; margin: 0; display: flex; flex-direction: column; gap: 8px; }
+.submission .status { font-size: .82rem; }
+.submission blockquote { margin: 8px 0; padding-left: 12px; border-left: 2px solid var(--line); font-family: var(--serif);
+  font-style: italic; color: var(--muted); }
+.steps { list-style: none; padding: 0; margin: 10px 0; }
+.steps li { position: relative; padding: 0 0 12px 24px; display: flex; flex-direction: column; }
+.steps li::before { content: ""; position: absolute; left: 0; top: 5px; width: 12px; height: 12px; border-radius: 50%;
+  box-sizing: border-box; border: 2px solid var(--line); background: var(--bg); }
+.steps li::after { content: ""; position: absolute; left: 5px; top: 19px; bottom: 0; width: 2px; background: var(--line); }
+.steps li:last-child::after { display: none; }
+.steps li.done::before { background: var(--text); border-color: var(--text); }
+.steps li.done::after { background: var(--text); }
+.steps li.now::before { border-color: var(--warn); }
+.steps li.todo strong { color: var(--muted); }
