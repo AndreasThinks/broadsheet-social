@@ -1,7 +1,10 @@
 """X (Twitter). X's API is pay-per-use, so every call costs money.
 
-Posting is on once an account is connected. Reading is off until you switch it on in Settings, and
-every call is checked against a monthly spend cap (X_MONTHLY_CAP_USD).
+Without an X account, Broadsheet still posts to X by handing the text over to X's own compose window
+(see handoff_url), which costs nothing and needs no developer app. Connecting an account ("direct
+posting") needs the user's own X app. Posting is on once an account is connected. Reading is off until
+you switch it on in Settings, and every call is checked against a monthly spend cap (X_MONTHLY_CAP_USD,
+or the limit set in Settings). When the cap is reached, posts go through the handoff instead.
 
 The X app's credentials come from X_CLIENT_ID / X_CLIENT_SECRET, or, where there are no environment
 variables (the desktop and Android apps), from Settings, where they are stored encrypted. A "Native
@@ -30,7 +33,37 @@ EXPANSIONS = "author_id,attachments.media_keys"
 USER_FIELDS = "profile_image_url,username,name"
 MEDIA_FIELDS = "url,preview_image_url,alt_text,width,height,type,variants"
 
+HANDOFF_ID = "x-handoff"
+DEVELOPER_CONSOLE = "https://console.x.com"
+
 _lock = asyncio.Lock()
+
+
+class XUnavailable(NetworkError):
+    """X won't take this post right now (spend cap, out of credit, rate limited); the handoff still works."""
+
+
+def handoff_enabled(db) -> bool:
+    return settings.x_enabled and bool(db.get("x_handoff", True))
+
+
+def handoff_url(text: str) -> str:
+    return "https://x.com/intent/post?" + urlencode({"text": text})
+
+
+class _HandoffRec:
+    handle = "X"
+
+
+class Handoff:
+    """Stands in for an X account in the composer when posts go through X's own window."""
+    network = "x"
+    account_id = HANDOFF_ID
+    rec = _HandoffRec()
+    char_limit = 280
+
+    async def max_chars(self) -> int:
+        return self.char_limit
 
 
 def callback_url() -> str:
@@ -45,7 +78,7 @@ def usage(db) -> dict:
     row = db.one("select * from x_usage where month=?", (month(),))
     counts = {k: (row[k] if row else 0) for k in PRICES}
     counts["cost"] = round(sum(counts[k] * PRICES[k] for k in PRICES), 3)
-    counts["cap"] = settings.x_monthly_cap_usd
+    counts["cap"] = cap(db)
     counts["month"] = month()
     return counts
 
@@ -57,11 +90,16 @@ def record_usage(db, **counts) -> None:
             db.x(f"update x_usage set {k} = {k} + ? where month=?", (int(v), month()))
 
 
+def cap(db) -> float:
+    saved = db.get("x_cap")
+    return float(saved) if saved is not None else settings.x_monthly_cap_usd
+
+
 def check_budget(db, **planned) -> None:
     cost = sum(PRICES[k] * v for k, v in planned.items())
     u = usage(db)
-    if u["cost"] + cost > settings.x_monthly_cap_usd:
-        raise NetworkError(f"X spend cap reached: ${u['cost']:.2f} of ${settings.x_monthly_cap_usd:.2f} used this month.")
+    if u["cost"] + cost > u["cap"]:
+        raise XUnavailable(f"X spend cap reached: ${u['cost']:.2f} of ${u['cap']:.2f} used this month.")
 
 
 def reading_enabled(db) -> bool:
@@ -197,7 +235,7 @@ class XAdapter(NetworkAdapter):
         token = await self._fresh()
         r = await http().request(method, f"{API}{path}", headers={"Authorization": f"Bearer {token}"}, **kw)
         if r.status_code == 402 or r.status_code == 429:
-            raise NetworkError(f"X refused the request ({r.status_code}): out of credit or rate limited.")
+            raise XUnavailable(f"X refused the request ({r.status_code}): out of credit or rate limited.")
         if r.status_code >= 400:
             raise NetworkError(f"X returned {r.status_code}: {r.text[:200]}")
         return r.json() if r.content else {}
@@ -275,7 +313,12 @@ class XAdapter(NetworkAdapter):
                 body["media"] = {"media_ids": media_ids}
             if parent:
                 body["reply"] = {"in_reply_to_tweet_id": parent}
-            res = await self._req("POST", "/2/tweets", json=body)
+            try:
+                res = await self._req("POST", "/2/tweets", json=body)
+            except XUnavailable as e:
+                if results:  # part of the thread is already up, so handing it all over would post it twice
+                    raise NetworkError(f"{e} Posted {len(results)} of {len(chunks)} parts.") from None
+                raise
             record_usage(self.db, **({"link_posts": 1} if URL_RE.search(chunk) else {"posts": 1}))
             tid = res["data"]["id"]
             results.append(PostResult(id=tid, url=f"https://x.com/{self.rec.handle}/status/{tid}"))
