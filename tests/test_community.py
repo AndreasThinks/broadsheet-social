@@ -260,9 +260,15 @@ def test_directory_pages_and_review_queue(wired, monkeypatch):
     c, db, st, feeds_dir = wired
     monkeypatch.setattr(dapp, "ADMIN_PASSWORD", "pw")
     with TestClient(dapp.app, base_url="https://testserver") as d:
-        for path in ("/", "/feeds", "/feeds/quiet-posters", "/data", "/write", "/feeds?sort=kept&net=across&q=quiet",
-                     "/healthz"):
+        for path in ("/", "/download", "/feeds", "/feeds/quiet-posters", "/privacy", "/feeds/share",
+                     "/feeds?sort=kept&net=across&q=quiet", "/healthz"):
             assert d.get(path).status_code == 200, path
+        for old, new in (("/data", "/privacy"), ("/write", "/feeds/share")):    # old addresses still work
+            r = d.get(old, follow_redirects=False)
+            assert r.status_code == 301 and r.headers["location"] == new
+        page = d.get("/feeds/quiet-posters").text
+        assert "/web/feeds/community/quiet-posters" in page                     # opens the feed in the browser version
+        assert "Rarity" in page and "People who rarely post" in page             # score parts and docstring, in words
         assert d.get("/review", follow_redirects=False).status_code == 303
         st.submit("r" * 40, "Morning reading", "", "", GOOD)
         d.post("/login", data={"password": "pw"})
