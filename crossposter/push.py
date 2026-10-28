@@ -9,8 +9,6 @@ from urllib.parse import quote
 
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import ec
-from py_vapid import Vapid01
-from pywebpush import WebPushException, webpush
 
 from . import adapters as registry
 from . import cache, feeds, people
@@ -49,6 +47,9 @@ def remove_subscription(db, endpoint: str) -> None:
 
 
 def _send_one(db, sub: dict, payload: str) -> bool:
+    # Imported here so the browser build, which has no server to push from, doesn't need them.
+    from py_vapid import Vapid01
+    from pywebpush import WebPushException, webpush
     keys = vapid_keys(db)
     try:
         webpush(sub, data=payload, vapid_private_key=Vapid01.from_raw(keys["private"].encode()),

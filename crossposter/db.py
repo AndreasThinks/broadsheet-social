@@ -53,12 +53,13 @@ create table if not exists seen_accounts (
 
 
 class DB:
-    def __init__(self, path: Path | str):
+    def __init__(self, path: Path | str, wal: bool = True):
         if str(path) != ":memory:":
             Path(path).parent.mkdir(parents=True, exist_ok=True)
         self.conn = sqlite3.connect(str(path), check_same_thread=False)
         self.conn.row_factory = sqlite3.Row
-        self.conn.execute("pragma journal_mode=wal")
+        if wal:  # the browser build's file system has no shared memory for WAL
+            self.conn.execute("pragma journal_mode=wal")
         self.lock = threading.RLock()
         with self.lock:
             self.conn.executescript(SCHEMA)

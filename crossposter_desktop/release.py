@@ -70,6 +70,7 @@ def imported_modules(root: Path = ROOT) -> list[str]:
                 names.add(node.module.split(".")[0])
     names.discard("crossposter")
     names.discard("__future__")
+    names -= {"js", "pyodide"}  # only crossposter/browser.py uses these, and only inside the browser version
     return sorted(names)
 
 

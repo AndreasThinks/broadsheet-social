@@ -1,11 +1,13 @@
 """AT Protocol OAuth: PAR + PKCE + DPoP, written against Bluesky's OAuth client spec.
 
-Two client modes:
+Three client modes:
 - Confidential web client (the normal case on a public HTTPS URL). Our client_id is the URL of the
   metadata document served at /oauth/bluesky/client-metadata.json, and we authenticate to the token
   endpoint with a private_key_jwt signed by a key we publish at /oauth/bluesky/jwks.json.
 - Loopback development client, used automatically when BASE_URL is http://127.0.0.1. No metadata to
   host, no client secret; sessions are shorter.
+- Public browser client, for the browser build (crossposter/browser.py). The metadata document is still a URL,
+  served by the Broadsheet home page, but there is no client key: tokens never leave the browser.
 """
 from __future__ import annotations
 
@@ -30,11 +32,11 @@ def callback_url() -> str:
 
 
 def is_confidential() -> bool:
-    return not settings.is_loopback
+    return not settings.is_loopback and not settings.browser
 
 
 def client_id() -> str:
-    if is_confidential():
+    if not settings.is_loopback:
         return f"{settings.base_url}/oauth/bluesky/client-metadata.json"
     return "http://localhost?" + urlencode({"redirect_uri": callback_url(), "scope": SCOPE})
 
@@ -58,6 +60,8 @@ def jwks(db) -> dict:
 
 
 def client_metadata() -> dict:
+    if settings.browser:
+        return browser_client_metadata(settings.base_url)
     return {
         "client_id": client_id(),
         "client_name": "Broadsheet",
@@ -70,6 +74,22 @@ def client_metadata() -> dict:
         "token_endpoint_auth_method": "private_key_jwt",
         "token_endpoint_auth_signing_alg": "ES256",
         "jwks_uri": f"{settings.base_url}/oauth/bluesky/jwks.json",
+        "dpop_bound_access_tokens": True,
+    }
+
+
+def browser_client_metadata(base_url: str) -> dict:
+    """The public client the browser build signs in as. The home page serves this at its client_id."""
+    return {
+        "client_id": f"{base_url}/oauth/bluesky/client-metadata.json",
+        "client_name": "Broadsheet",
+        "client_uri": base_url,
+        "application_type": "web",
+        "grant_types": ["authorization_code", "refresh_token"],
+        "response_types": ["code"],
+        "redirect_uris": [f"{base_url}/auth/bluesky/callback"],
+        "scope": SCOPE,
+        "token_endpoint_auth_method": "none",
         "dpop_bound_access_tokens": True,
     }
 

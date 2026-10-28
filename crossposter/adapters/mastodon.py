@@ -46,7 +46,38 @@ async def _app_for(db, host: str) -> dict:
         raise NetworkError(f"{host} refused to register the app ({r.status_code}). Is it a Mastodon-compatible server?")
     app = r.json()
     db.x("insert or replace into mastodon_apps values(?, ?, ?)", (key, app["client_id"], app["client_secret"]))
+    if app.get("vapid_key"):
+        db.set(f"mastodon_vapid|{host}", app["vapid_key"])
     return app
+
+
+# Push straight from a Mastodon server to this browser, used by the browser build (see push routes in app.py).
+PUSH_ALERTS = {"reply": ["mention"], "mention": ["mention"], "quote": ["quote"], "follow": ["follow", "follow_request"],
+               "like": ["favourite"], "repost": ["reblog"]}
+
+
+async def vapid_key(db, server: str) -> str:
+    """The server's Web Push key, which the browser's subscription must be made with."""
+    host = normalise_instance(server)
+    key = db.get(f"mastodon_vapid|{host}")
+    if not key:
+        r = await http().get(f"https://{host}/api/v2/instance")
+        if r.status_code == 200:
+            key = ((r.json().get("configuration") or {}).get("vapid") or {}).get("public_key")
+        if not key:
+            raise NetworkError(f"{host} doesn't offer push notifications.")
+        db.set(f"mastodon_vapid|{host}", key)
+    return key
+
+
+async def subscribe_push(rec: AccountRecord, sub: dict, kinds: list[str]) -> None:
+    alerts = {alert: True for k in kinds for alert in PUSH_ALERTS.get(k, [])}
+    r = await http().post(f"{rec.server}/api/v1/push/subscription",
+                          headers={"Authorization": f"Bearer {rec.tokens['access_token']}"},
+                          json={"subscription": {"endpoint": sub["endpoint"], "keys": sub["keys"], "standard": True},
+                                "data": {"alerts": alerts, "policy": "all"}})
+    if r.status_code >= 400:
+        raise NetworkError(f"{rec.handle}: the server refused push notifications ({r.status_code}).")
 
 
 async def start_login(db, instance: str) -> str:

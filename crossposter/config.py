@@ -31,6 +31,8 @@ class Settings:
     demo: bool = field(default_factory=lambda: _bool("DEMO"))
     # Set by the desktop launcher, which signs its own window in with APP_PASSWORD at /login/desktop.
     desktop: bool = field(default_factory=lambda: _bool("DESKTOP"))
+    # Set when the app runs inside a web page (Pyodide), keeping everything in that browser. See crossposter/browser.py.
+    browser: bool = field(default_factory=lambda: _bool("BROWSER"))
     # X is on unless X_ENABLED=false. The app credentials can also be entered in Settings.
     x_enabled: bool = field(default_factory=lambda: _bool("X_ENABLED", True))
     x_client_id: str = field(default_factory=lambda: os.environ.get("X_CLIENT_ID", ""))
