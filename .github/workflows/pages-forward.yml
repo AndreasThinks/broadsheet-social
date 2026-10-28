@@ -1,9 +1,12 @@
 name: pages-forward
-# The downloads used to live on GitHub Pages, and desktop apps installed then still check it for updates. Run this
-# once (after apps.yml has published to the website) to leave Pages as a forwarding site: its pages send people to
+# The downloads used to live on GitHub Pages, and desktop apps installed then still check it for updates. This runs
+# when the forwarding pages change (or by hand) and leaves Pages as a forwarding site: its pages send people to
 # the website, and its update manifest hands old apps a bundle that switches them to the website for good
 # (see crossposter/config.py). Once those apps have had time to update, Pages can be turned off.
 on:
+  push:
+    branches: [main]
+    paths: [pages-forward/**, .github/workflows/pages-forward.yml]
   workflow_dispatch:
 
 permissions:
