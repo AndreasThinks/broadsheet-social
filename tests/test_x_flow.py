@@ -95,18 +95,65 @@ def test_confidential_client_uses_basic_auth(fake):
     assert fake.find("/2/oauth2/token")[0].headers["authorization"].startswith("Basic ")
 
 
-def test_settings_page_takes_x_credentials():
+def test_guided_setup_takes_x_credentials():
     from crossposter.app import app, db
     with TestClient(app, base_url="https://testserver") as c:
         page = c.get("/settings").text
-        assert "/auth/x/callback" in page and 'action="/settings/x/app"' in page
+        assert 'href="/settings/x/setup"' in page and "Finish on X" in page
+        setup = c.get("/settings/x/setup").text
+        assert "https://cross.example.com/auth/x/callback" in setup and 'action="/settings/x/app"' in setup
+        assert 'href="/auth/x/start"' not in setup  # no Client ID yet
+        r = c.post("/settings/x/app", data={"client_id": "not an id"}, follow_redirects=False)
+        assert "error=" in r.headers["location"] and xapi.client_id(db) == ""
         r = c.post("/settings/x/app", data={"client_id": "abc", "client_secret": "s3"}, follow_redirects=False)
-        assert r.status_code == 303
+        assert r.status_code == 303 and r.headers["location"].startswith("/settings/x/setup")
         assert xapi.client_id(db) == "abc" and xapi.client_secret(db) == "s3"
         c.post("/settings/x/app", data={"client_id": "abc2", "client_secret": ""})
         assert xapi.client_id(db) == "abc2" and xapi.client_secret(db) == "s3"  # empty keeps the saved secret
-        assert 'href="/auth/x/start"' in c.get("/settings").text
-        c.post("/settings/x/post", data={})
-        assert not xapi.post_by_default(db)
+        assert 'href="/auth/x/start"' in c.get("/settings/x/setup").text
         db.set("x_client_id", "")
-        db.set("x_post_by_default", True)
+        db.set("x_client_secret", "")
+
+
+def test_handoff_when_no_x_account():
+    from crossposter.app import app, db
+    with TestClient(app, base_url="https://testserver") as c:
+        assert 'name="x_handoff"' in c.get("/compose").text
+        r = c.post("/compose", data={"text": "hello @ada.bsky.social https://example.com", "accounts": ["demo-bluesky"],
+                                     "x_handoff": xapi.HANDOFF_ID, "thread": "on"})
+        assert "Posted." in r.text and "One more step for X" in r.text
+        assert "https://x.com/intent/post?text=hello" in r.text and "https%3A%2F%2Fexample.com" in r.text
+        # X on its own: nothing to post here, only the handoff.
+        r = c.post("/compose", data={"text": "just X", "x_handoff": xapi.HANDOFF_ID})
+        assert "Ready for X." in r.text and "intent/post?text=just+X" in r.text
+        # Switched off in Settings: no X choice in the composer.
+        c.post("/settings/x/handoff", data={})
+        assert not xapi.handoff_enabled(db)
+        assert 'name="x_handoff"' not in c.get("/compose").text
+        assert c.post("/compose", data={"text": "x", "x_handoff": xapi.HANDOFF_ID}).text.count("Pick at least one") == 1
+        c.post("/settings/x/handoff", data={"on": "1"})
+        assert xapi.handoff_enabled(db)
+
+
+def test_direct_x_falls_back_to_handoff_at_the_cap(fake):
+    from crossposter.app import app, db
+    rec = AccountRecord(id="x:42", network="x", native_id="42", handle="ada", display_name="Ada", avatar="", server=xapi.API,
+                        tokens={"access_token": "at", "refresh_token": "rt", "expires_at": time.time() + 3600})
+    base.save_account(db, rec)
+    try:
+        with TestClient(app, base_url="https://testserver") as c:
+            compose = c.get("/compose").text
+            assert 'value="x:42"' in compose and 'name="x_handoff"' not in compose
+            c.post("/settings/x/cap", data={"cap": "0"})
+            assert xapi.cap(db) == 0
+            r = c.post("/compose", data={"text": "capped", "accounts": ["demo-bluesky", "x:42"], "thread": "on"})
+            assert "Posted." in r.text and "spend cap reached" in r.text and "intent/post?text=capped" in r.text
+            assert not fake.find("/2/tweets")
+            c.post("/settings/x/cap", data={"cap": "5"})
+            r = c.post("/compose", data={"text": "direct", "accounts": ["x:42"], "thread": "on"})
+            assert "Posted." in r.text and "One more step" not in r.text and len(fake.find("/2/tweets")) == 1
+            assert 'action="/settings/x/cap"' in c.get("/settings").text
+    finally:
+        db.x("delete from accounts where id='x:42'")
+        db.x("delete from x_usage")
+        db.x("delete from kv where key=?", ("x_cap",))

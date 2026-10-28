@@ -381,6 +381,17 @@
       if (e.target.id === "images") updateAltFields(e.target);
       if (e.target.closest && e.target.closest("#compose-form")) updateCounts();
     });
+    // Copy buttons: data-copy names the field to copy.
+    document.addEventListener("click", function (e) {
+      var b = e.target.closest && e.target.closest("[data-copy]");
+      if (!b) return;
+      var field = document.querySelector(b.dataset.copy);
+      if (!field) return;
+      field.select();
+      var done = function () { b.textContent = "Copied"; setTimeout(function () { b.textContent = "Copy"; }, 1500); };
+      if (navigator.clipboard) navigator.clipboard.writeText(field.value).then(done, function () { document.execCommand("copy"); done(); });
+      else { document.execCommand("copy"); done(); }
+    });
     var on = document.getElementById("push-on");
     if (on) on.addEventListener("click", function () { enablePush().catch(function (e) { status(String(e)); }); });
     var test = document.getElementById("push-test");

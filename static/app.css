@@ -248,6 +248,21 @@ label > input, label > textarea { margin-top: 4px; font-weight: 400; }
 .row.connect > label:not(.grow) { display: block; flex: 1 1 220px; }
 .checks { display: flex; flex-wrap: wrap; gap: 12px; margin: 10px 0; }
 .checks label { font-weight: 400; display: inline-flex; gap: 6px; align-items: center; }
+/* X: finishing a post in X's own window, and the guided setup for direct posting */
+.handoff { background: var(--accent-soft); border-radius: var(--radius); padding: 12px 14px; margin: 10px 0;
+  display: flex; flex-direction: column; gap: 6px; align-items: flex-start; }
+.handoff strong { font-family: var(--serif); font-size: 1.15rem; font-weight: 500; }
+.handoff p { margin: 0; }
+.x-direct { border-top: 1px solid var(--line); margin-top: 16px; padding-top: 12px; }
+.setup-steps { list-style: none; counter-reset: step; padding: 0; margin: 16px 0; display: flex; flex-direction: column; gap: 18px; }
+.setup-steps > li { counter-increment: step; display: grid; grid-template-columns: 28px 1fr; gap: 12px; }
+.setup-steps > li > div { min-width: 0; }
+.setup-steps > li::before { content: counter(step); width: 26px; height: 26px; border-radius: 50%; border: 1px solid var(--rule);
+  display: grid; place-items: center; font-size: .8rem; font-weight: 600; }
+.setup-steps > li.done::before { content: "\2713"; background: var(--ink); color: var(--on-ink); border-color: var(--ink); }
+.setup-steps p { margin: 4px 0 0; }
+.copy-row { margin-top: 6px; flex-wrap: nowrap; }
+.copy-row input { flex: 1; min-width: 0; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: .85rem; }
 .spend { height: 6px; background: var(--line); margin: 6px 0 12px; }
 .spend > span { display: block; height: 6px; background: var(--warn); max-width: 100%; }
 .preview { margin-top: 16px; }

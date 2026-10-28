@@ -118,6 +118,8 @@ def home_aside(accts) -> list:
     rows = [Li(Span(NETWORK_LABELS.get(a.network, a.network)),
                Span(a.rec.handle + ("" if a.network != "x" or x_default else " · off by default")))
             for a in accts]
+    if _handoff_available(accts):
+        rows.append(Li(Span("X"), Span("finish on X")))
     return [Section(H2("While you were away"), *news),
             Section(H3("Your accounts", cls="aside-label"), Ul(*rows, cls="aside-accounts"),
                     A("Manage", href="/settings#accounts"))]
@@ -440,13 +442,20 @@ async def get(reply: str = ""):
                                  data_network=a.network, data_limit=str(limit), cls="acct-box"),
                            avatar(a.me(), "xs"), Span(a.rec.handle), badge(a.network),
                            Span("", cls="counter", data_for=a.account_id),
-                           Small("costs money", cls="muted") if a.experimental else None,
+                           Small("$0.015 a post, $0.20 with a link", cls="muted") if a.network == "x" else None,
                            cls="acct-option"))
+    handoff = _handoff_available(accts) and not reply
+    if handoff:
+        boxes.append(Label(Input(type="checkbox", name="x_handoff", value=xapi.HANDOFF_ID, checked=True,
+                                 data_network="x", data_limit="280", cls="acct-box"),
+                           Span("Finish on X"), badge("x"), Span("", cls="counter", data_for=xapi.HANDOFF_ID),
+                           cls="acct-option"))
+    targets = accts + ([xapi.Handoff()] if handoff else [])
     overrides = Details(Summary("Customise the text per network"),
                         *[Label(Span(a.rec.handle, " ", badge(a.network)),
                                 Textarea(name=f"text_{a.account_id}", rows=3, placeholder="Leave empty to use the main text",
                                          data_override=a.account_id, data_network=a.network, cls="mentionable"))
-                          for a in accts],
+                          for a in targets],
                         cls="overrides")
     preview = Div(id="mention-preview", hx_post="/compose/preview", hx_trigger="input delay:700ms from:#compose-form, "
                   "change from:#compose-form, load", hx_include="#compose-form textarea, #compose-form .acct-box, "
@@ -471,6 +480,38 @@ async def get(reply: str = ""):
                  active="/compose")
 
 
+def _handoff_available(accts) -> bool:
+    """Posts reach X through X's own compose window when no X account is connected."""
+    return xapi.handoff_enabled(db) and not any(a.network == "x" for a in accts)
+
+
+def _chosen_targets(form, accts) -> list:
+    """The accounts a post goes to, plus the X handoff when it's ticked."""
+    chosen = form.getlist("accounts")
+    reply_key = form.get("reply") or ""
+    if reply_key:
+        chosen = [split_key(reply_key)[0]]
+    by_id = {a.account_id: a for a in accts}
+    targets = [by_id[c] for c in chosen if c in by_id]
+    if not reply_key and form.get("x_handoff") == xapi.HANDOFF_ID and _handoff_available(accts):
+        targets.append(xapi.Handoff())
+    return targets
+
+
+def handoff_box(text: str, images: int = 0, why: str = ""):
+    """The last step of a post that goes to X through X's own window."""
+    notes = [why or "Your text is filled in. Press Post on X."]
+    if images:
+        notes.append("Add your images on X, they can't be passed along.")
+    if length_for("x", text) > 280:
+        notes.append(f"It's {length_for('x', text)} characters, so X will ask you to shorten it.")
+    return Div(Strong("One more step for X"), P(" ".join(notes), cls="muted"),
+               A("Open X to post", href=xapi.handoff_url(text), target="_blank", rel="noopener", cls="button primary"),
+               None if settings.browser else
+               P(Small("Tired of this step? ", A("Set up direct posting", href="/settings/x/setup"))),
+               cls="handoff")
+
+
 HOW = {"native": "tags them", "linked": "tags their linked account", "bridged": "tags them through Bridgy Fed",
        "plain": "plain text, no account known there", "name": "their name, no account linked there"}
 
@@ -480,12 +521,7 @@ async def post(req):
     """How each mention will be written on each network the post goes to."""
     form = await req.form()
     text = form.get("text") or ""
-    chosen = form.getlist("accounts")
-    reply_key = form.get("reply") or ""
-    if reply_key:
-        chosen = [split_key(reply_key)[0]]
-    by_id = {a.account_id: a for a in accounts()}
-    targets = [by_id[c] for c in chosen if c in by_id]
+    targets = _chosen_targets(form, accounts())
     outcomes: dict[str, list] = {}
     for a in targets:
         t = (form.get(f"text_{a.account_id}") or "").strip() or text
@@ -522,16 +558,12 @@ async def post(req):
 async def post(req):
     form = await req.form()
     text = (form.get("text") or "").strip()
-    chosen = form.getlist("accounts")
     reply_key = form.get("reply") or ""
     cw = (form.get("cw") or "").strip()
     thread = form.get("thread") == "on"
     if not text:
         return error_box("Write something first.")
-    if reply_key:
-        chosen = [split_key(reply_key)[0]]
-    by_id = {a.account_id: a for a in accounts()}
-    targets = [by_id[c] for c in chosen if c in by_id]
+    targets = _chosen_targets(form, accounts())
     if not targets:
         return error_box("Pick at least one account.")
     uploads = []
@@ -552,10 +584,16 @@ async def post(req):
         t, _ = await people.rewrite(db, t, a)
         texts[a.account_id] = t
         limit = await a.max_chars()
-        if not thread and length_for(a.network, t) > limit:
+        if not thread and a.account_id != xapi.HANDOFF_ID and length_for(a.network, t) > limit:
             problems.append(f"{a.rec.handle}: {length_for(a.network, t)} of {limit} characters")
     if problems:
         return error_box("Too long, turn on threading or shorten it. " + "; ".join(problems))
+
+    handoffs = []  # (text, why) for posts that X gets through its own window
+    if any(a.account_id == xapi.HANDOFF_ID for a in targets):
+        t = texts[xapi.HANDOFF_ID]
+        handoffs.append((f"CW: {cw}\n\n{t}" if cw else t, ""))
+        targets = [a for a in targets if a.account_id != xapi.HANDOFF_ID]
 
     async def one(a):
         return await a.post(texts[a.account_id], uploads, reply_post, cw, thread)
@@ -563,6 +601,11 @@ async def post(req):
     results = await asyncio.gather(*[one(a) for a in targets], return_exceptions=True)
     rows, record = [], []
     for a, res in zip(targets, results):
+        if isinstance(res, xapi.XUnavailable) and not reply_post:
+            t = texts[a.account_id]
+            handoffs.append((f"CW: {cw}\n\n{t}" if cw else t, f"{res} Your text is filled in, so you can post it on X yourself."))
+            results = [r if r is not res else None for r in results]
+            continue
         if isinstance(res, Exception):
             rows.append(Li(badge(a.network), " ", a.rec.handle, ": ", Strong("failed"), f" ({res})", cls="fail"))
             record.append({"account": a.account_id, "error": str(res)})
@@ -577,10 +620,11 @@ async def post(req):
     ok = all(not isinstance(r, Exception) for r in results)
     if reply_key and ok:
         community.record_action(db, reply_key)
-    return Div(Strong("Posted." if ok else "Some posts failed."), Ul(*rows),
+    headline = ("Posted." if rows else "Ready for X.") if ok else "Some posts failed."
+    return Div(Div(Strong(headline), Ul(*rows) if rows else None, cls="result " + ("ok" if ok else "warn")),
+               *[handoff_box(t, len(uploads), why) for t, why in handoffs],
                Script("document.getElementById('compose-form').reset();document.getElementById('alt-fields').innerHTML='';"
-                      "document.getElementById('mention-preview').innerHTML='';") if ok else None,
-               cls="result " + ("ok" if ok else "warn"))
+                      "document.getElementById('mention-preview').innerHTML='';") if ok else None)
 
 
 # ---------- people ----------
@@ -1320,18 +1364,32 @@ async def get(error: str = "", ok: str = ""):
                     Form(Button("Remove", cls="small danger"), method="post", action=f"/accounts/remove?{urlencode({'id': a.account_id})}")
                     if not a.account_id.startswith("demo-") else Small("demo", cls="muted"), cls="acct-row")
                  for a in accts]
+    if settings.x_enabled and not any(a.network == "x" for a in accts):
+        on = xapi.handoff_enabled(db)
+        acct_rows.append(Li(Span(Strong("X"), Small(" Finish on X · no sign-in needed" if on else " Off", cls="muted"),
+                                 cls="chip"), badge("x"),
+                            Form(Hidden(name="on", value="" if on else "1"),
+                                 Button("Turn off" if on else "Turn on", cls="small"),
+                                 method="post", action="/settings/x/handoff"), cls="acct-row", id="x-handoff"))
     kinds = push.notify_kinds(db)
     kind_boxes = [Label(Input(type="checkbox", name="kinds", value=k, checked=k in kinds), label)
                   for k, label in (("reply", "Replies"), ("mention", "Mentions"), ("quote", "Quotes"),
                                    ("follow", "New followers"), ("like", "Likes"), ("repost", "Reposts"))]
-    usage = xapi.usage(db)
-    if settings.browser:
-        x_section = Section(H3("X"), P("X isn't available in the browser version, because X doesn't let web pages "
-                                       "connect to it. The desktop and Android apps support X.", cls="muted"), cls="panel")
-    elif settings.x_enabled:
-        x_section = _x_settings()
+    x_connected = any(a.network == "x" for a in accts)
+    if not settings.x_enabled:
+        x_section, x_direct = None, None
+    elif x_connected:
+        x_section, x_direct = _x_settings(), None
+    elif settings.browser:
+        x_section, x_direct = None, P("Posts reach X through X's own window, where you press Post. Posting to X directly "
+                                      "needs the desktop or Android app, because X doesn't let web pages connect to it.",
+                                      cls="muted")
     else:
-        x_section = Section(H3("X"), P("X is switched off on this server (X_ENABLED=false).", cls="muted"), cls="panel")
+        x_section, x_direct = None, Div(
+            H3("Post to X directly", cls="aside-label"),
+            P("Skip the extra step, attach images and read your X timeline. This needs your own X developer app, and "
+              "X charges you per post.", cls="muted"),
+            A("Set up direct posting", href="/settings/x/setup", cls="button"), cls="x-direct")
     if settings.browser:
         notify_intro = P("Mastodon can notify this browser even when Broadsheet is closed. Bluesky notifications only "
                          "show up while Broadsheet is open.", cls="muted")
@@ -1352,6 +1410,7 @@ async def get(error: str = "", ok: str = ""):
                               Button("Connect Mastodon", cls="primary"), method="post", action="/auth/mastodon/start", cls="row connect"),
                          P("Any server that speaks the Mastodon API works too: GoToSocial, Pleroma, Akkoma, Pixelfed and others.",
                            cls="muted"),
+                         x_direct,
                          cls="panel"),
                  Section(H3("Notifications on this device"), notify_intro,
                          Div(*notify_buttons, Span(id="push-status", cls="muted"), cls="row"),
@@ -1392,40 +1451,77 @@ def _browser_settings():
 
 
 def _x_settings():
+    """Settings for a connected X account: spending, posting and reading."""
     usage = xapi.usage(db)
-    cid = xapi.client_id(db)
-    connected = any(a.network == "x" for a in accounts())
-    if xapi.credentials_from_env():
-        creds = P("The X app's credentials are set on the server.", cls="muted")
-    else:
-        creds = Details(
-            Summary("X app credentials" + (" (saved)" if cid else "")),
-            P("Create an app at developer.x.com, switch on OAuth 2.0 with read and write permissions, and add this "
-              "callback URL exactly: ", Code(xapi.callback_url()), ". A Native App needs only the client ID; a Web "
-              "App also needs the client secret.", cls="muted"),
-            Form(Label("Client ID", Input(name="client_id", value=cid, required=True, autocapitalize="none",
-                                          autocorrect="off", autocomplete="off")),
-                 Label("Client secret", Input(name="client_secret", type="password", autocomplete="off",
-                                              placeholder="Saved, leave empty to keep" if xapi.client_secret(db)
-                                              else "Only for a Web App")),
-                 Button("Save", cls="small"), method="post", action="/settings/x/app", cls="stack"),
-            open=not cid)
     return Section(
         H3("X"),
         P("X charges per request. Posting costs $0.015 per post, or $0.20 if it contains a link. Reading costs "
-          "$0.005 per post. Reads are off unless you switch them on, and everything stops at your monthly cap.",
-          cls="muted"),
+          "$0.005 per post. Reads are off unless you switch them on. When your monthly limit is reached, posts go "
+          "through X's own window instead.", cls="muted"),
         P(Strong(f"${usage['cost']:.2f}"), f" of ${usage['cap']:.2f} used in {usage['month']} · "
           f"{usage['post_reads']} posts read, {usage['posts'] + usage['link_posts']} posted"),
-        Div(Span(style=f"width: {min(100, 100 * usage['cost'] / usage['cap']) if usage['cap'] else 0:.0f}%"),
+        Div(Span(style=f"width: {min(100, 100 * usage['cost'] / usage['cap']) if usage['cap'] else 100:.0f}%"),
             cls="spend", role="img", aria_label=f"{usage['cost']:.2f} of {usage['cap']:.2f} dollars used"),
-        creds,
-        A("Connect X account", href="/auth/x/start", cls="button primary") if cid and not connected else None,
+        Form(Label("Monthly limit in dollars", Input(name="cap", type="number", min="0", step="0.5",
+                                                     value=f"{usage['cap']:g}", inputmode="decimal")),
+             Button("Save", cls="small"), method="post", action="/settings/x/cap", cls="row connect"),
         Form(Label(Input(type="checkbox", name="on", value="1", checked=xapi.post_by_default(db), onchange="this.form.submit()"),
                    "Include X when cross-posting (you can untick it per post)"), method="post", action="/settings/x/post"),
         Form(Label(Input(type="checkbox", name="on", value="1", checked=xapi.reading_enabled(db), onchange="this.form.submit()"),
                    "Read my X timeline and mentions (costs money)"), method="post", action="/settings/x"),
+        A("X app settings", href="/settings/x/setup", cls="small"),
         cls="panel", id="x")
+
+
+@rt("/settings/x/setup")
+async def get(error: str = "", ok: str = ""):
+    if settings.browser or not settings.x_enabled:
+        return RedirectResponse("/settings#accounts", status_code=303)
+    cid = xapi.client_id(db)
+    connected = next((a for a in accounts() if a.network == "x"), None)
+    from_env = xapi.credentials_from_env()
+
+    def step(done: bool, *content):
+        return Li(Div(*content), cls="done" if done else None)
+
+    if from_env:
+        app_steps = [step(True, P("The X app is set up on this server."))]
+    else:
+        app_steps = [
+            step(bool(cid), Strong("Sign in to the X Developer Console and add credit."),
+                 P("X charges per post, so it needs a card on file. ",
+                   A("Open the Developer Console", href=xapi.DEVELOPER_CONSOLE, target="_blank", rel="noopener"),
+                   cls="muted")),
+            step(bool(cid), Strong("Create an app."),
+                 P("Under user authentication, switch on OAuth 2.0, choose ", Strong("Native App"), " and ",
+                   Strong("Read and write"), ".", cls="muted")),
+            step(bool(cid), Strong("Add this callback URL to the app."),
+                 Div(Input(value=xapi.callback_url(), readonly=True, id="x-callback", aria_label="Callback URL"),
+                     Button("Copy", type="button", cls="small", data_copy="#x-callback"), cls="row copy-row"),
+                 P("This is the address for this device. It has to match exactly.", cls="muted")),
+            step(bool(cid), Strong("Paste your app's Client ID."),
+                 Form(Div(Input(name="client_id", value=cid, required=True, autocapitalize="none", autocorrect="off",
+                                autocomplete="off", aria_label="Client ID", placeholder="Client ID"),
+                          Button("Save", cls="small"), cls="row copy-row"),
+                      Hidden(name="next", value="/settings/x/setup"),
+                      Details(Summary("Made a Web App instead?"),
+                              Label("Client secret", Input(name="client_secret", type="password", autocomplete="off",
+                                                           placeholder="Saved, leave empty to keep" if xapi.client_secret(db)
+                                                           else "Only for a Web App"))),
+                      method="post", action="/settings/x/app", cls="stack")),
+        ]
+    last = step(bool(connected), Strong("Connect your X account."),
+                P(f"Connected as @{connected.rec.handle}.", cls="muted") if connected else
+                A("Connect X", href="/auth/x/start", cls="button primary") if cid else
+                P("Save your Client ID first.", cls="muted"))
+    return shell("Post to X directly",
+                 H2("Post to X directly", cls="page-title"),
+                 Div(error, cls="error") if error else None, Div(ok, cls="result ok") if ok else None,
+                 P("Until you finish, posts keep reaching X through X's own window. Your app's details stay on this "
+                   "device.", cls="muted"),
+                 Ol(*app_steps, last, cls="setup-steps"),
+                 A("Back to Settings", href="/settings#accounts", cls="small"),
+                 active="/settings")
 
 
 @rt("/settings/notify")
@@ -1446,6 +1542,21 @@ async def post(on: str = ""):
     return RedirectResponse("/settings#x", status_code=303)
 
 
+@rt("/settings/x/handoff")
+async def post(on: str = ""):
+    db.set("x_handoff", bool(on))
+    return RedirectResponse("/settings#accounts", status_code=303)
+
+
+@rt("/settings/x/cap")
+async def post(cap: str = ""):
+    try:
+        db.set("x_cap", max(0.0, float(cap)))
+    except ValueError:
+        return RedirectResponse("/settings?error=Enter+a+number+of+dollars#x", status_code=303)
+    return RedirectResponse("/settings?ok=Saved#x", status_code=303)
+
+
 @rt("/settings/x/post")
 async def post(on: str = ""):
     db.set("x_post_by_default", bool(on))
@@ -1453,13 +1564,18 @@ async def post(on: str = ""):
 
 
 @rt("/settings/x/app")
-async def post(client_id: str = "", client_secret: str = ""):
+async def post(client_id: str = "", client_secret: str = "", next: str = "/settings/x/setup"):
+    back = next if next.startswith("/settings") else "/settings/x/setup"
     if xapi.credentials_from_env():
-        return RedirectResponse("/settings#x", status_code=303)
+        return RedirectResponse(back, status_code=303)
+    client_id = client_id.strip()
+    if not client_id or any(c.isspace() for c in client_id) or len(client_id) > 100:
+        return RedirectResponse(back + "?" + urlencode({"error": "That doesn't look like a Client ID. Copy it again "
+                                                         "from your app's Keys and tokens page."}), status_code=303)
     if not client_secret.strip():
         client_secret = xapi.client_secret(db)
     xapi.save_credentials(db, client_id, client_secret)
-    return RedirectResponse("/settings?ok=X+app+saved#x", status_code=303)
+    return RedirectResponse(back + "?ok=Client+ID+saved", status_code=303)
 
 
 @rt("/settings/muted")
@@ -1520,22 +1636,28 @@ async def get(code: str = "", state: str = "", iss: str = "", error: str = "", e
     return RedirectResponse("/settings?" + urlencode({"ok": f"Connected {rec.handle}"}), status_code=303)
 
 
+def _x_back(err: Exception | str):
+    if settings.browser:
+        return _back(err)
+    return RedirectResponse("/settings/x/setup?" + urlencode({"error": str(err)}), status_code=303)
+
+
 @rt("/auth/x/start")
 async def get():
     try:
         return RedirectResponse(await xapi.start_login(db), status_code=303)
     except Exception as e:
-        return _back(e)
+        return _x_back(e)
 
 
 @rt("/auth/x/callback")
 async def get(code: str = "", state: str = "", error: str = ""):
     if error or not code:
-        return _back(error or "Sign-in was cancelled.")
+        return _x_back(error or "Sign-in was cancelled.")
     try:
         rec = await xapi.finish_login(db, code, state)
     except Exception as e:
-        return _back(e)
+        return _x_back(e)
     return RedirectResponse("/settings?" + urlencode({"ok": f"Connected @{rec.handle} on X"}), status_code=303)
 
 

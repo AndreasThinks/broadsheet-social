@@ -74,7 +74,7 @@ On Linux, or to run from source: `pip install -r requirements-desktop.txt` then 
 - Bluesky signs in as a public OAuth client (no secret; the metadata is served at `/web/oauth/bluesky/client-metadata.json`). Mastodon registers an app per server as usual. Sign-in pages open full-window, since they refuse to load in a frame, and come back to `/web/auth/...`.
 - `web/build.py` packs the app and the extra wheels into `web/dist` when the website's image is built (`directory/Dockerfile`).
 
-What's different: no X (its API doesn't allow web pages); Mastodon notifications are pushed straight from your Mastodon server to the browser, while Bluesky notifications only appear while the page is open; one tab at a time. Clearing the site's data signs you out, so Settings › This browser offers a backup file you can restore in another browser. Locally: `python -m web.build`, then `HTTPS=0 python -m directory.app` and open http://127.0.0.1:5002/web.
+What's different: X posts go through X's own window, since its API doesn't allow web pages; Mastodon notifications are pushed straight from your Mastodon server to the browser, while Bluesky notifications only appear while the page is open; one tab at a time. Clearing the site's data signs you out, so Settings › This browser offers a backup file you can restore in another browser. Locally: `python -m web.build`, then `HTTPS=0 python -m directory.app` and open http://127.0.0.1:5002/web.
 
 ## Custom feeds
 
@@ -154,24 +154,30 @@ at it with `DIRECTORY_URL=http://127.0.0.1:5002`.
 
 ## X
 
-X's API is pay-per-use: $0.005 per post read, $0.015 per post created, $0.20 for a post with a link
-([pricing](https://docs.x.com/x-api/getting-started/pricing), October 2026). One X app covers the
-web, desktop and Android versions:
+X works without any setup. When no X account is connected, ticking X in the composer hands the post to
+X's own compose window (`x.com/intent/post`) after it has gone out everywhere else, and you press Post
+there. That costs nothing and works in every version, including the browser one. Images can't be passed
+along that way, so you add them on X. Settings → Accounts can switch it off.
 
-1. At [developer.x.com](https://developer.x.com), create a project and app and buy some credit.
-2. In the app's *User authentication settings*, switch on OAuth 2.0 with **Read and write**
-   permissions. Choose **Native App** (a public client: only the client ID is needed, so it is safe
-   to type into the desktop and phone apps) or **Web App** (also gives a client secret).
-3. Add a callback URL for every place you'll sign in from. Settings shows the exact one for each:
-   - web: `<BASE_URL>/auth/x/callback`
+Posting to X directly needs your own X app, because X's API is pay-per-use: $0.005 per post read,
+$0.015 per post created, $0.20 for a post with a link
+([pricing](https://docs.x.com/x-api/getting-started/pricing), October 2026). Settings → Accounts →
+*Set up direct posting* walks through it on the desktop and Android apps:
+
+1. At the [X Developer Console](https://console.x.com), add credit and create an app.
+2. Switch on OAuth 2.0 with **Read and write** permissions. Choose **Native App** (a public client:
+   only the client ID is needed, so it is safe to type into the desktop and phone apps) or **Web App**
+   (also gives a client secret).
+3. Add the callback URL the setup page shows for this device:
+   - web server: `<BASE_URL>/auth/x/callback`
    - desktop: `http://127.0.0.1:47615/auth/x/callback`
    - Android: `http://127.0.0.1:47616/auth/x/callback`
-4. Give the app the client ID (and secret for a Web App): either as `X_CLIENT_ID` and
-   `X_CLIENT_SECRET` on the server, or under Settings, X app credentials, where they're stored
-   encrypted. `X_MONTHLY_CAP_USD` sets the spend cap (default 10).
-5. Connect your account in Settings. Posting works straight away, and X is ticked in the composer
-   unless you switch that off. Reading your timeline and mentions is a separate switch, off by
-   default; Settings shows what you've spent this month. `X_ENABLED=false` hides X entirely.
+4. Paste the client ID (and secret for a Web App), or set `X_CLIENT_ID` and `X_CLIENT_SECRET` on a
+   server. They're stored encrypted.
+5. Connect your account. Posting works straight away, and X is ticked in the composer unless you
+   switch that off. Reading your timeline and mentions is a separate switch, off by default. Settings
+   shows what you've spent this month and a monthly limit (`X_MONTHLY_CAP_USD`, default 10); once
+   it's reached, posts go through X's own window instead. `X_ENABLED=false` hides X entirely.
 
 ## Settings reference
 
