@@ -126,7 +126,17 @@ table.check-table td:first-child { width: 28px; }
 .visually-hidden { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
 @media (max-width: 640px) {
   .wrap { padding: 0 16px; }
+  .masthead .wrap { justify-content: space-between; }
+  .nav { order: 3; flex: 1 1 100%; flex-wrap: nowrap; gap: 20px; overflow-x: auto; white-space: nowrap; }
   h1 { font-size: 2rem; }
   .tile:nth-child(odd) { border-left: 0; padding-left: 0; }
   .hbar { grid-template-columns: 96px minmax(0, 1fr) 40px; }
 }
+
+.downloads { display: grid; gap: 14px; grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); margin: 8px 0 12px; }
+.download { border: 1px solid var(--line); border-radius: 4px; padding: 18px; display: flex; flex-direction: column; gap: 8px; }
+.download.mine { border-color: var(--ink); box-shadow: 0 0 0 1px var(--ink); }
+.download h2 { margin: 0; font-size: 1.3rem; }
+.download p { margin: 0; color: var(--muted); font-size: .92rem; }
+.download p:first-of-type { flex: 1; }
+.download .small { font-size: .8rem; }

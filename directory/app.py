@@ -1,11 +1,13 @@
-"""Broadsheet Feeds: the community directory. Lists shared feeds with their download counts and anonymous weekly stats,
-takes submissions from the app, and gives maintainers a review queue.
+"""Broadsheet's website: the app downloads and desktop updates (see releases.py), and the community feed directory, which
+lists shared feeds with their download counts and anonymous weekly stats, takes submissions from the app, and gives
+maintainers a review queue.
 
 Run locally with `python -m directory.app` (http://127.0.0.1:5002). Environment:
     DATA_DIR        where directory.db lives (default ./directory-data; /data on Railway)
     ADMIN_PASSWORD  password for the review queue (no password: the queue is closed)
     SECRET_KEY      signs the maintainer's session cookie
     SEED_CREDIT     credit shown on the starter feeds listed on first start
+Downloads are stored in DATA_DIR/releases.
 """
 from __future__ import annotations
 
@@ -18,23 +20,25 @@ from pathlib import Path
 from urllib.parse import urlencode
 
 from fasthtml.common import (A, Button, Code, Div, Em, Footer, Form, H1, H2, H3, Header, Input, Label, Li, Main, Nav, Ol,
-                             Option, P, Pre, Section, Select, Span, Strong, Table, Tbody, Td, Textarea, Title, Tr, Ul,
+                             Option, P, Pre, Script, Section, Select, Span, Strong, Table, Tbody, Td, Textarea, Title, Tr, Ul,
                              Link, Meta, fast_app)
+from starlette.concurrency import run_in_threadpool
 from starlette.requests import Request
 from starlette.responses import FileResponse, JSONResponse, RedirectResponse, Response
 
+from .releases import APPS, DESKTOP, Refused, Releases, verify
 from .store import MIN_REPORTS, Rejected, Store
 
 ROOT = Path(__file__).resolve().parent
 REPO = ROOT.parent
 DATA_DIR = Path(os.environ.get("DATA_DIR", "directory-data"))
 ADMIN_PASSWORD = os.environ.get("ADMIN_PASSWORD", "")
-APP_URL = os.environ.get("APP_DOWNLOAD_URL", "https://andreasthinks.github.io/cross-poster-/")
 SOURCE_URL = "https://github.com/AndreasThinks/cross-poster-"
 NETS = {"bluesky": "Bluesky", "mastodon": "Mastodon", "x": "X"}
 
 store = Store(DATA_DIR / "directory.db")
 store.seed(REPO / "feeds", os.environ.get("SEED_CREDIT", "AndreasThinks"))
+releases = Releases(DATA_DIR / "releases")
 
 hdrs = (Meta(name="color-scheme", content="light dark"), Link(rel="stylesheet", href="/static/site.css"),
         Link(rel="icon", type="image/png", href="/static/icons/icon-192.png"))
@@ -70,17 +74,17 @@ def is_admin(session) -> bool:
 
 
 def layout(title: str, *content, active: str = "/", session=None):
-    links = [("/", "Directory"), ("/data", "How the numbers work"), ("/write", "Write a feed")]
+    links = [("/", "Get the app"), ("/feeds", "Community feeds"), ("/data", "How the numbers work"), ("/write", "Write a feed")]
     if session is not None and is_admin(session):
         links.append(("/review", f"Review {len(store.queue()) or ''}".strip()))
-    return (Title(f"{title} · Broadsheet Feeds"),
-            Header(Div(A("Broadsheet ", Em("Feeds"), href="/", cls="brand"),
+    return (Title(f"{title} · Broadsheet"),
+            Header(Div(A("Broadsheet", href="/", cls="brand"),
                        Nav(*[A(label, href=h, cls="active" if h == active else None,
                                aria_current="page" if h == active else None) for h, label in links],
                            cls="nav", aria_label="Sections"),
-                       A("Get Broadsheet", href=APP_URL, cls="button primary"), cls="wrap"), cls="masthead"),
+                       A("Download", href="/#download", cls="button primary"), cls="wrap"), cls="masthead"),
             Main(*content, cls="wrap page"),
-            Footer(Div(Span("Broadsheet Feeds is a directory. Feeds run in your app, never on this site."),
+            Footer(Div(Span("Broadsheet runs on your device. Your accounts, posts and feeds never pass through this site."),
                        A("Source on GitHub", href=SOURCE_URL), A("Data we keep", href="/data"), cls="wrap"), cls="footer"))
 
 
@@ -122,9 +126,107 @@ def spark(stats_weeks: list[dict]) -> str:
     return " ".join(f"{2 + i * 52 / (len(vals) - 1):.1f},{18 - (v - lo) / span * 16:.1f}" for i, v in pts)
 
 
-# ---------- directory ----------
+# ---------- the app and its downloads ----------
+
+PLATFORMS = (
+    ("android", "Android", "Broadsheet-android.apk", "Download APK",
+     ("Android 8 or later. Allow installs from your browser when asked.",)),
+    ("windows", "Windows", "Broadsheet-windows.zip", "Download for Windows",
+     ("Unzip, then open ", Code("Broadsheet.exe"), ". Choose “More info › Run anyway” the first time.")),
+    ("mac", "macOS", "Broadsheet-macos.zip", "Download for Mac",
+     ("Unzip and move it to Applications. Right-click › Open the first time.",)),
+)
+# Put the visitor's own platform first.
+PICK_OS = Script("""const ua = navigator.userAgent;
+const os = /Android/.test(ua) ? "android" : /Windows/.test(ua) ? "windows" : /Mac/.test(ua) ? "mac" : "";
+const mine = os && document.querySelector(`[data-os="${os}"]`);
+if (mine) { mine.classList.add("mine"); mine.parentNode.prepend(mine); }""")
+
 
 @rt("/")
+def get(session):
+    rel = releases.current()
+    cards = [Div(H2(label), P(*note), A(button, href=f"/downloads/{fname}", cls="button primary") if rel
+                 else Span("Coming soon", cls="muted"),
+                 P(f"{rel['sizes'][fname] / 1048576:.0f} MB", cls="muted small") if rel else None,
+                 cls="download", data_os=key) for key, label, fname, button, note in PLATFORMS]
+    top = sorted(store.feeds(), key=lambda f: f["downloads"], reverse=True)[:3]
+    return layout("Get the app", Div(
+        P("Bluesky · Mastodon · X", cls="kicker"), H1("Broadsheet"),
+        P("Read and post across your networks from one app. It runs entirely on your device: your accounts and posts "
+          "never pass through anyone else's server.", cls="dek"),
+        Div(*cards, cls="downloads", id="download"),
+        P(f"Built from commit {rel['commit'][:7]} on {day(rel['published_at'])}." if rel else
+          "The first build hasn't been published yet.", cls="muted small"),
+        Section(H2("Staying up to date"),
+                P("The desktop apps update themselves: they fetch new versions in the background and switch over the next "
+                  "time you open them. On Android, install the new APK over the old one, or add this page to ",
+                  A("Obtainium", href="https://obtainium.imranr.dev/"), " to get updates automatically."), cls="block"),
+        Section(H2("Notifications"),
+                P("On Android, the app checks for replies, mentions, quotes and follows about every 15 minutes, even when "
+                  "it's closed. Android may check less often to save battery."), cls="block"),
+        Section(H2("Community feeds"),
+                P("Ranking rules people have written for Broadsheet, each a short Python file that runs on your device. "
+                  "Add them in the app under Feeds › Community."),
+                Ul(*[Li(A(f["name"], href=f"/feeds/{f['slug']}"), Span(f" · {f['description']}", cls="muted"))
+                     for f in top], cls="checks") if top else None,
+                P(A("Browse all community feeds", href="/feeds", cls="button")), cls="block"),
+        cls="content"),
+        Div(Section(H3("Your data stays with you"),
+                    P("The apps keep your accounts, feeds and database in your own user data folder. This site only "
+                      "hands out the apps and the community feeds, and keeps nothing about who downloads them.")),
+            cls="side"), PICK_OS, active="/", session=session)
+
+
+def _release_file(name: str):
+    path = releases.path(name)
+    if not path:
+        return Response("Not published yet.", status_code=404)
+    # no-cache: browsers and the desktop app always revalidate, so a new build shows up straight away
+    return FileResponse(path, filename=name if name in APPS else None, headers={"Cache-Control": "no-cache"})
+
+
+@rt("/downloads/{name}")
+def get(name: str):
+    return _release_file(name) if name in APPS else Response("Not found", status_code=404)
+
+
+@rt("/desktop/{name}")
+def get(name: str):
+    """What installed desktop apps check for updates (crossposter_desktop/updater.py)."""
+    return _release_file(name) if name in DESKTOP else Response("Not found", status_code=404)
+
+
+@rt("/api/releases")
+def get():
+    rel = releases.current()
+    return JSONResponse({k: rel[k] for k in ("commit", "build", "published_at", "sizes")} if rel else {})
+
+
+@rt("/api/releases/{commit}/publish")
+async def post(commit: str, req: Request):
+    try:
+        await run_in_threadpool(verify, req.headers.get("authorization", ""), commit)
+        rel = releases.publish(commit)
+    except Refused as e:
+        return JSONResponse({"error": str(e)}, status_code=e.status)
+    return JSONResponse({"ok": True, "commit": rel["commit"], "build": rel["build"]})
+
+
+@rt("/api/releases/{commit}/{name}")
+async def put(commit: str, name: str, req: Request):
+    """One file of a release, uploaded by .github/workflows/apps.yml."""
+    try:
+        await run_in_threadpool(verify, req.headers.get("authorization", ""), commit)
+        size = await releases.receive(commit, name, req.stream())
+    except Refused as e:
+        return JSONResponse({"error": str(e)}, status_code=e.status)
+    return JSONResponse({"ok": True, "bytes": size})
+
+
+# ---------- directory ----------
+
+@rt("/feeds")
 def get(session, q: str = "", net: str = "", sort: str = "downloads"):
     feeds = store.feeds()
     if q:
@@ -172,7 +274,7 @@ def get(session, q: str = "", net: str = "", sort: str = "downloads"):
              Label("Sort by", Select(*[Option(lbl, value=v, selected=v == sort) for v, lbl in
                                        (("downloads", "Most downloaded"), ("kept", "Most kept"), ("rising", "Rising this week"),
                                         ("newest", "Newest"))], name="sort"), cls="field"),
-             Button("Show", cls="button"), method="get", action="/", cls="filters"),
+             Button("Show", cls="button"), method="get", action="/feeds", cls="filters"),
         Ol(*rows, cls="feed-list") if rows else P("No feeds match that.", cls="muted"),
         P(f"Feeds with fewer than {MIN_REPORTS} apps reporting show “Too new” instead of weekly figures.", cls="muted small"),
         cls="content"),
@@ -181,7 +283,7 @@ def get(session, q: str = "", net: str = "", sort: str = "downloads"):
                     P("Open the feed in Broadsheet and choose ", Em("Share with the community"),
                       ". A maintainer reads the code before it's listed."),
                     A("How sharing works", href="/write", cls="button primary")),
-            cls="side"), active="/", session=session)
+            cls="side"), active="/feeds", session=session)
 
 
 def _spark_svg(points: str):
@@ -230,7 +332,7 @@ def get(slug: str, session):
                          Div(f"shown once {MIN_REPORTS}+ apps report", cls="sub"), cls="tile"))
     versions = store.versions(slug)
     return layout(f["name"], Div(
-        P(A("← All feeds", href="/"), cls="small"),
+        P(A("← All feeds", href="/feeds"), cls="small"),
         Div(P("Community feed", cls="kicker"), H1(f["name"]), P(f["description"], cls="italic"),
             P(Span(f"by {f['credit']}" if f["credit"] else "Shared anonymously"), " · ",
               Span(f"Version {f['version']} · updated {day(f['updated_at'])}"), " · ", Span("✓ Reviewed by a maintainer", cls="reviewed"),
@@ -264,7 +366,7 @@ def get(slug: str, session):
             Section(H3("Versions"), Ol(*[Li(Strong(str(v["version"])), f" · {day(v['created_at'])} · ",
                                            Span(v["note"] or "Update", cls="muted")) for v in versions],
                                        cls="checks", style="list-style:none;padding:0")),
-            cls="side"), session=session)
+            cls="side"), active="/feeds", session=session)
 
 
 @rt("/data")

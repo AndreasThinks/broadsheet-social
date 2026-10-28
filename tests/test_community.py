@@ -260,7 +260,8 @@ def test_directory_pages_and_review_queue(wired, monkeypatch):
     c, db, st, feeds_dir = wired
     monkeypatch.setattr(dapp, "ADMIN_PASSWORD", "pw")
     with TestClient(dapp.app, base_url="https://testserver") as d:
-        for path in ("/", "/feeds/quiet-posters", "/data", "/write", "/?sort=kept&net=across&q=quiet", "/healthz"):
+        for path in ("/", "/feeds", "/feeds/quiet-posters", "/data", "/write", "/feeds?sort=kept&net=across&q=quiet",
+                     "/healthz"):
             assert d.get(path).status_code == 200, path
         assert d.get("/review", follow_redirects=False).status_code == 303
         st.submit("r" * 40, "Morning reading", "", "", GOOD)
@@ -269,6 +270,6 @@ def test_directory_pages_and_review_queue(wired, monkeypatch):
         assert "Morning reading" in page and "Approve and list" in page
         sid = st.queue()[0]["id"]
         d.post(f"/review/{sid}", data={"decision": "approve", "note": ""})
-        assert st.feed("morning-reading") and "Morning reading" in d.get("/").text
+        assert st.feed("morning-reading") and "Morning reading" in d.get("/feeds").text
         r = d.post("/api/report", json={"week": "2001-W01", "feeds": []})
         assert r.status_code == 400

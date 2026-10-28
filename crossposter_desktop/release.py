@@ -26,7 +26,8 @@ DEPS_FILES = ("requirements.txt", "requirements-desktop.txt")
 BUNDLE_NAME = "crossposter-app.zip"
 REPO = "AndreasThinks/cross-poster-"
 CHANNEL = "desktop-latest"
-SITE = "https://andreasthinks.github.io/cross-poster-/"
+SITE = "https://broadsheet-feeds-production.up.railway.app/"  # directory/app.py serves the downloads and updates
+UPDATE_URL = SITE + "desktop/"
 
 
 def deps_hash(root: Path = ROOT) -> str:
@@ -93,8 +94,9 @@ def make_bundle(root: Path, out: Path, info: dict | None = None) -> dict:
         for path in _files(root):
             z.write(path, path.relative_to(root).as_posix())
         z.writestr("build.json", json.dumps(info, indent=2))
+    # update_url: where apps should look from now on, so the site can move without a new download of the app.
     manifest = {**info, "bundle": BUNDLE_NAME, "sha256": hashlib.sha256(bundle.read_bytes()).hexdigest(),
-                "page": SITE}
+                "page": SITE, "update_url": UPDATE_URL}
     (out / "manifest.json").write_text(json.dumps(manifest, indent=2))
     return manifest
 
