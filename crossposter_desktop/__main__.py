@@ -142,6 +142,8 @@ def smoke(port: int, token: str) -> None:
         assert c.get("/healthz").json() == {"ok": True}
         home = c.get("/login/desktop", params={"token": token})
         assert home.status_code == 200 and "Broadsheet" in home.text, home.status_code
+    if sys.platform == "win32":
+        import clr  # noqa: F401  the window needs .NET (pythonnet); loading it is what fails on a blocked download
     print("smoke test passed")
 
 

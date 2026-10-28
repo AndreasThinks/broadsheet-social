@@ -59,6 +59,10 @@ jobs:
         env:
           CROSSPOSTER_DESKTOP_DATA: ${{ runner.temp }}\cp-smoke
         run: |
+          # Mark every file as downloaded from the internet, as unzipping a download in Explorer does.
+          Get-ChildItem "dist\Broadsheet" -Recurse -File | ForEach-Object {
+            Set-Content -LiteralPath $_.FullName -Stream Zone.Identifier -Value "[ZoneTransfer]`r`nZoneId=3"
+          }
           $p = Start-Process -FilePath "dist\Broadsheet\Broadsheet.exe" -ArgumentList "--smoke" -Wait -PassThru
           Get-Content "$env:CROSSPOSTER_DESKTOP_DATA\desktop.log" -ErrorAction SilentlyContinue
           if ($p.ExitCode -ne 0) { exit $p.ExitCode }
