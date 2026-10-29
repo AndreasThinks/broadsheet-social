@@ -1,6 +1,7 @@
 """FastHTML components: post cards, account chips, layout."""
 from __future__ import annotations
 
+import json
 import time
 from html import escape
 from datetime import datetime
@@ -99,26 +100,47 @@ def rich_text(segments: list[Segment], network: str, account_id: str):
     return NotStr(f'<div class="text">{"".join(parts)}</div>')
 
 
+VIEWABLE = ("image", "video", "gif")
+MAX_TILES = 4
+
+
 def media_grid(post: Post):
+    """Up to four tiles; every picture and video opens in the in-app viewer (static/app.js), which also
+    reaches the ones past the fourth. Without scripts, pictures still open in a new tab."""
     if not post.media:
         return None
+    viewable = [m for m in post.media if m.kind in VIEWABLE]
+    listing = [{"kind": m.kind, "url": safe(m.url), "thumb": safe(m.thumb) if m.thumb else "", "alt": m.alt,
+                "stream": safe(m.stream) if m.stream else ""} for m in viewable]
+    extra = len(viewable) - MAX_TILES
     items = []
-    for m in post.media[:4]:
+    for i, m in enumerate(viewable[:MAX_TILES]):
+        marks = [Span("ALT", cls="media-badge") if m.alt else None,
+                 Span(f"+{extra}", cls="media-more") if extra > 0 and i == MAX_TILES - 1 else None]
         if m.kind == "image":
-            ratio = f"aspect-ratio:{m.width}/{m.height}" if m.width and m.height and len(post.media) == 1 else ""
-            items.append(A(Img(src=m.thumb or m.url, alt=m.alt, loading="lazy", style=ratio), href=safe(m.url),
-                           target="_blank", cls="media-item", title=m.alt))
-        elif m.kind in ("video", "gif"):
-            attrs = {"controls": True, "preload": "none", "poster": m.thumb, "playsinline": True}
-            if m.kind == "gif":
-                attrs.update(autoplay=True, loop=True, muted=True)
-            if m.stream:
-                items.append(Video(cls="media-item hls", data_src=m.stream, aria_label=m.alt or "video", **attrs))
-            else:
-                items.append(Video(src=m.url, cls="media-item", aria_label=m.alt or "video", **attrs))
+            ratio = f"aspect-ratio:{m.width}/{m.height}" if m.width and m.height and len(viewable) == 1 else ""
+            label = f"Picture {i + 1} of {len(viewable)}" + (f": {m.alt}" if m.alt else "")
+            items.append(A(Img(src=m.thumb or m.url, alt=m.alt, loading="lazy", style=ratio), *marks,
+                           href=safe(m.url), target="_blank", rel="noopener", cls="media-item", data_index=str(i),
+                           aria_label=label))
+            continue
+        attrs = {"preload": "none", "poster": m.thumb, "playsinline": True, "muted": True}
+        if m.kind == "gif":
+            attrs.update(autoplay=True, loop=True)
+            controls = [Span("GIF", cls="media-badge media-badge-top"),
+                        Button(cls="media-pause", type="button", aria_label="Pause")]
         else:
-            items.append(A("Audio attachment", href=safe(m.url), target="_blank", cls="media-item"))
-    return Div(*items, cls=f"media media-{min(len(items), 4)}")
+            attrs.update(controls=True)
+            controls = []
+        player = (Video(cls="hls", data_src=m.stream, aria_label=m.alt or "video", **attrs) if m.stream
+                  else Video(src=m.url, aria_label=m.alt or "video", **attrs))
+        items.append(Div(player, *controls, *marks,
+                         Button(cls="media-open", type="button", aria_label="Open full size"),
+                         cls=f"media-item media-{m.kind}", data_index=str(i)))
+    for m in post.media:
+        if m.kind not in VIEWABLE:
+            items.append(A("Audio attachment", href=safe(m.url), target="_blank", rel="noopener", cls="media-item"))
+    return Div(*items, cls=f"media media-{min(len(items), MAX_TILES)}", data_media=json.dumps(listing))
 
 
 def link_card(post: Post):

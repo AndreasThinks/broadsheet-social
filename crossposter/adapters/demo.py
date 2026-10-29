@@ -55,9 +55,11 @@ class DemoAdapter(NetworkAdapter):
                      created_at=now - i * rnd.randint(300, 2400), text=plain_segments(text), url="#",
                      likes=rnd.randint(0, 400), reposts=rnd.randint(0, 120), replies=rnd.randint(0, 60))
             if "photo" in text:
-                p.media = [Media("image", url=f"https://picsum.photos/seed/{seed}{i}/1200/800",
-                                 thumb=f"https://picsum.photos/seed/{seed}{i}/600/400",
-                                 alt="A river at sunrise with mist over the water", width=1200, height=800)]
+                count = rnd.choice([1, 1, 2, 3, 5])
+                p.media = [Media("image", url=f"https://picsum.photos/seed/{seed}{i}{k}/1200/800",
+                                 thumb=f"https://picsum.photos/seed/{seed}{i}{k}/600/400",
+                                 alt="A river at sunrise with mist over the water" if k == 0 else "",
+                                 width=1200, height=800) for k in range(count)]
             if "example.com/blog" in text:
                 p.card = LinkCard(url="https://example.com/blog/tiny-ssg", title="A tiny static site generator",
                                   description="Two hundred lines of Python, no build step, no regrets.",

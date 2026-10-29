@@ -1,4 +1,4 @@
-// Broadsheet client: service worker, video, composer counters and @mentions, push sign-up, arranging tabs,
+// Broadsheet client: service worker, video and the media viewer, composer counters and @mentions, push sign-up, arranging tabs,
 // pull to refresh.
 (function () {
   "use strict";
@@ -9,7 +9,7 @@
     navigator.serviceWorker.register("/sw.js", { scope: "/" }).catch(function (e) { console.warn("sw", e); });
   }
 
-  // ---- Bluesky videos are HLS streams; Safari plays them natively, others need hls.js ----
+  // ---- Video: Bluesky videos are HLS streams; Safari plays them natively, others need hls.js ----
   var hlsLoading = null;
   function loadHls() {
     if (!hlsLoading) {
@@ -23,18 +23,204 @@
     }
     return hlsLoading;
   }
-  function setupVideos(root) {
-    root.querySelectorAll("video.hls:not([data-ready])").forEach(function (v) {
-      v.dataset.ready = "1";
-      var src = v.dataset.src;
-      if (v.canPlayType("application/vnd.apple.mpegurl")) { v.src = src; return; }
-      v.addEventListener("play", function once() {
-        v.removeEventListener("play", once);
-        loadHls().then(function (Hls) {
-          if (Hls && Hls.isSupported()) { var h = new Hls(); h.loadSource(src); h.attachMedia(v); v.play(); }
-        });
-      });
+  // Gives an HLS video its stream (once) and resolves when it can be played.
+  function attachStream(v, src) {
+    if (v._attached) return v._attached;
+    if (v.canPlayType("application/vnd.apple.mpegurl")) { v.src = src; v._attached = Promise.resolve(); return v._attached; }
+    v._attached = loadHls().then(function (Hls) {
+      if (!Hls || !Hls.isSupported()) return;
+      v._hls = new Hls(); v._hls.loadSource(src); v._hls.attachMedia(v);
     });
+    return v._attached;
+  }
+  function play(v) {
+    var go = function () { var p = v.play(); if (p && p.catch) p.catch(function () {}); };
+    if (v.dataset.src) attachStream(v, v.dataset.src).then(go); else go();
+  }
+  var calm = window.matchMedia && matchMedia("(prefers-reduced-motion: reduce)").matches;
+  var saveData = navigator.connection && navigator.connection.saveData;
+  // Videos in the feed play muted while they're on screen; GIFs loop. Neither moves if you asked for less motion.
+  var inView = "IntersectionObserver" in window && new IntersectionObserver(function (entries) {
+    entries.forEach(function (e) {
+      var v = e.target;
+      if (e.isIntersecting && e.intersectionRatio >= 0.6) { if (!v._userPaused) play(v); }
+      else if (!v.paused) { autoPause(v); }
+    });
+  }, { threshold: [0, 0.6] });
+  function autoPause(v) { v._autoPaused = true; v.pause(); }
+  function setupVideos(root) {
+    root.querySelectorAll(".media video:not([data-ready])").forEach(function (v) {
+      v.dataset.ready = "1";
+      var gif = v.parentNode.classList.contains("media-gif");
+      if (gif && calm) {
+        v.removeAttribute("autoplay"); v.pause(); v.parentNode.classList.add("paused");
+        v.parentNode.querySelector(".media-pause").setAttribute("aria-label", "Play");
+      }
+      if (v.dataset.src) v.addEventListener("play", function () { attachStream(v, v.dataset.src); });
+      // A pause the person made sticks (no more autoplay) until they press play again.
+      v.addEventListener("pause", function () { if (v._autoPaused) v._autoPaused = false; else v._userPaused = true; });
+      v.addEventListener("play", function () { v._userPaused = false; });
+      if (inView && !calm && !saveData) inView.observe(v);
+    });
+  }
+
+  // ---- Media viewer: pictures and videos open over the page instead of in a browser tab ----
+  var SVG = function (d, fill) {
+    return '<svg class="icon" viewBox="0 0 24 24" fill="' + (fill ? "currentColor" : "none") + '" stroke="' +
+      (fill ? "none" : "currentColor") + '" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' + d + '</svg>';
+  };
+  var ICON_CLOSE = SVG('<path d="M6 6l12 12M18 6L6 18"/>'), ICON_PREV = SVG('<path d="M15 5l-7 7 7 7"/>'),
+      ICON_NEXT = SVG('<path d="M9 5l7 7-7 7"/>');
+  var viewer = null;
+  function buildViewer() {
+    var v = el("div", "viewer");
+    v.setAttribute("role", "dialog");
+    v.setAttribute("aria-modal", "true");
+    v.setAttribute("aria-label", "Media viewer");
+    v.hidden = true;
+    v.innerHTML =
+      '<div class="viewer-bar"><span class="viewer-count"></span><span class="viewer-by"></span>' +
+      '<a class="viewer-orig" target="_blank" rel="noopener">Open original</a>' +
+      '<button type="button" class="viewer-btn viewer-close" aria-label="Close">' + ICON_CLOSE + '</button></div>' +
+      '<div class="viewer-stage"><button type="button" class="viewer-btn viewer-prev" aria-label="Previous">' + ICON_PREV + '</button>' +
+      '<div class="viewer-slot"></div>' +
+      '<button type="button" class="viewer-btn viewer-next" aria-label="Next">' + ICON_NEXT + '</button></div>' +
+      '<div class="viewer-foot"><p class="viewer-alt"></p><div class="viewer-thumbs"></div>' +
+      '<span class="viewer-hint"></span></div>';
+    document.body.appendChild(v);
+    var q = function (sel) { return v.querySelector(sel); };
+    viewer = { root: v, slot: q(".viewer-slot"), count: q(".viewer-count"), by: q(".viewer-by"), orig: q(".viewer-orig"),
+               alt: q(".viewer-alt"), thumbs: q(".viewer-thumbs"), hint: q(".viewer-hint"), prev: q(".viewer-prev"),
+               next: q(".viewer-next"), close: q(".viewer-close"), items: [], i: 0, back: null };
+    viewer.close.addEventListener("click", requestClose);
+    viewer.prev.addEventListener("click", function () { step(-1); });
+    viewer.next.addEventListener("click", function () { step(1); });
+    // A click on the dark area around the picture closes, like Esc.
+    v.addEventListener("click", function (e) {
+      if (e.target === v || e.target.classList.contains("viewer-stage") || e.target === viewer.slot) requestClose();
+    });
+    v.addEventListener("keydown", function (e) {
+      if (e.key === "Escape") { e.preventDefault(); requestClose(); }
+      else if (e.key === "ArrowLeft") { e.preventDefault(); step(-1); }
+      else if (e.key === "ArrowRight") { e.preventDefault(); step(1); }
+      else if (e.key === "Tab") {  // keep focus inside the viewer
+        var f = Array.prototype.filter.call(v.querySelectorAll("button, a[href], video"), function (n) { return n.offsetParent; });
+        if (!f.length) return;
+        var first = f[0], last = f[f.length - 1];
+        if (e.shiftKey && document.activeElement === first) { e.preventDefault(); last.focus(); }
+        else if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first.focus(); }
+      }
+    });
+    // Swipe sideways to move, swipe down to close.
+    var t0 = null;
+    v.addEventListener("touchstart", function (e) {
+      t0 = e.touches.length === 1 && !viewer.slot.classList.contains("zoomed") && !(e.target.closest && e.target.closest("video, .viewer-thumbs"))
+        ? { x: e.touches[0].clientX, y: e.touches[0].clientY } : null;
+    }, { passive: true });
+    v.addEventListener("touchend", function (e) {
+      if (!t0) return;
+      var dx = e.changedTouches[0].clientX - t0.x, dy = e.changedTouches[0].clientY - t0.y;
+      t0 = null;
+      if (Math.abs(dx) > 50 && Math.abs(dx) > Math.abs(dy)) step(dx < 0 ? 1 : -1);
+      else if (dy > 90 && dy > Math.abs(dx)) requestClose();
+    });
+    window.addEventListener("popstate", function () { if (!viewer.root.hidden) closeViewer(); });
+  }
+  function clearSlot() {
+    var old = viewer.slot.querySelector("video");
+    if (old) { old.pause(); if (old._hls) old._hls.destroy(); }
+    viewer.slot.innerHTML = "";
+    viewer.slot.classList.remove("zoomed");
+  }
+  function show(i) {
+    var items = viewer.items, n = items.length;
+    viewer.i = (i + n) % n;
+    var m = items[viewer.i];
+    clearSlot();
+    if (m.kind === "image") {
+      var img = el("img");
+      img.src = m.url; img.alt = m.alt || "";
+      img.addEventListener("click", function (e) { e.stopPropagation(); viewer.slot.classList.toggle("zoomed"); });
+      viewer.slot.appendChild(img);
+    } else {
+      var v = el("video");
+      v.controls = true; v.playsInline = true; v.poster = m.thumb || "";
+      if (m.kind === "gif") { v.loop = true; v.muted = true; }
+      v.setAttribute("aria-label", m.alt || "video");
+      if (m.stream) v.dataset.src = m.stream; else v.src = m.url;
+      viewer.slot.appendChild(v);
+      if (!calm || m.kind !== "gif") play(v);
+    }
+    viewer.count.textContent = n > 1 ? (viewer.i + 1) + " of " + n : "";
+    viewer.orig.href = m.url;
+    viewer.alt.hidden = !m.alt;
+    viewer.alt.innerHTML = m.alt ? '<span class="media-badge">ALT</span> ' : "";
+    if (m.alt) viewer.alt.appendChild(document.createTextNode(m.alt));
+    viewer.prev.hidden = viewer.next.hidden = n < 2;
+    Array.prototype.forEach.call(viewer.thumbs.children, function (b, k) {
+      b.classList.toggle("on", k === viewer.i);
+      if (k === viewer.i) b.setAttribute("aria-current", "true"); else b.removeAttribute("aria-current");
+    });
+  }
+  function step(d) { if (viewer.items.length > 1) show(viewer.i + d); }
+  function openViewer(media, i) {
+    if (!viewer) buildViewer();
+    var items;
+    try { items = JSON.parse(media.dataset.media || "[]"); } catch (e) { return false; }
+    if (!items.length) return false;
+    viewer.items = items;
+    var post = media.closest(".post, .quote");
+    var name = post && post.querySelector(".name, .quote-head strong");
+    viewer.by.textContent = name ? name.textContent.trim() : "";
+    viewer.thumbs.innerHTML = "";
+    if (items.length > 1) items.forEach(function (m, k) {
+      var b = el("button", "viewer-thumb");
+      b.type = "button";
+      b.setAttribute("aria-label", "Show " + (m.kind === "image" ? "picture " : "video ") + (k + 1));
+      if (m.thumb || m.kind === "image") { var im = el("img"); im.src = m.thumb || m.url; im.alt = ""; b.appendChild(im); }
+      b.addEventListener("click", function () { show(k); });
+      viewer.thumbs.appendChild(b);
+    });
+    var touch = "ontouchstart" in window || navigator.maxTouchPoints > 0;
+    viewer.hint.textContent = touch ? "Swipe to move · tap a picture to zoom · swipe down to close"
+                                    : "Arrow keys to move · click a picture to zoom · Esc to close";
+    document.querySelectorAll(".media video").forEach(function (v) { if (!v.paused) autoPause(v); });
+    viewer.back = document.activeElement;
+    viewer.root.hidden = false;
+    document.documentElement.classList.add("viewer-open");
+    // An extra history entry, so the phone's back button (and the browser's) closes the viewer.
+    try { history.pushState({ broadsheetViewer: true }, ""); } catch (e) {}
+    show(i);
+    viewer.close.focus();
+    return true;
+  }
+  function requestClose() {
+    if (history.state && history.state.broadsheetViewer) history.back();  // popstate closes it
+    else closeViewer();
+  }
+  function closeViewer() {
+    clearSlot();
+    viewer.root.hidden = true;
+    document.documentElement.classList.remove("viewer-open");
+    if (viewer.back && viewer.back.focus) viewer.back.focus();
+  }
+  function setupViewer() {
+    document.addEventListener("click", function (e) {
+      if (e.button || e.ctrlKey || e.metaKey || e.shiftKey) return;  // let "open in new tab" through
+      var pause = e.target.closest && e.target.closest(".media-pause");
+      if (pause) {
+        e.preventDefault(); e.stopPropagation();
+        var g = pause.parentNode.querySelector("video");
+        if (g.paused) { play(g); pause.parentNode.classList.remove("paused"); pause.setAttribute("aria-label", "Pause"); }
+        else { g.pause(); pause.parentNode.classList.add("paused"); pause.setAttribute("aria-label", "Play"); }
+        return;
+      }
+      var tile = e.target.closest && e.target.closest(".media [data-index]");
+      if (!tile) return;
+      // On a video only the expand button opens the viewer; the rest is the player's own controls.
+      if (tile.tagName !== "A" && !(e.target.closest(".media-open") || tile.classList.contains("media-gif"))) return;
+      if (openViewer(tile.closest(".media"), parseInt(tile.dataset.index, 10) || 0)) { e.preventDefault(); e.stopPropagation(); }
+    }, true);
   }
 
   // ---- Composer: per-network character counts and alt-text fields ----
@@ -321,7 +507,7 @@
 
     document.addEventListener("touchstart", function (e) {
       if (busy || e.touches.length !== 1 || window.scrollY > 0) { start = null; return; }
-      if (e.target.closest && e.target.closest("input, textarea, select, video, .mention-menu")) { start = null; return; }
+      if (e.target.closest && e.target.closest("input, textarea, select, video, .mention-menu, .viewer")) { start = null; return; }
       start = { x: e.touches[0].clientX, y: e.touches[0].clientY };
       pulling = false;
     }, { passive: true });
@@ -369,6 +555,7 @@
     init(document);
     setupArrange();
     setupPull();
+    setupViewer();
     document.addEventListener("input", function (e) {
       if (e.target.closest && e.target.closest("#compose-form")) updateCounts();
       if (e.target.classList && e.target.classList.contains("mentionable")) onMentionInput(e.target);
