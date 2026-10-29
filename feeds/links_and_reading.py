@@ -1,4 +1,8 @@
-"""Posts that share a link, ranked by how much discussion they got. Good for a reading list."""
+"""Posts that share a link, ranked by how much discussion they got. Good for a reading list.
+
+Replies are compared within each network (Mastodon has no quotes and only counts replies your
+server has seen), so links from Bluesky and Mastodon get a fair share of the top spots.
+"""
 from crossposter.feeds import Feed, Post, Ctx
 
 feed = Feed(
@@ -15,7 +19,7 @@ def keep(post: Post, ctx: Ctx) -> bool:
 
 def score(post: Post, ctx: Ctx) -> dict:
     return {
-        "discussion": ctx.log1p(post.replies + post.quotes) * 2,
+        "discussion": 2 * ctx.normalised(post, lambda p: p.replies + p.quotes),
         "engagement": ctx.normalised_engagement(post),
         "freshness": 1 / (ctx.age_hours(post) + 3),
     }

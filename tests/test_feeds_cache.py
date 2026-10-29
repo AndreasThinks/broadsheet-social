@@ -132,3 +132,41 @@ def test_save_arrangement_keeps_absent_tabs():
     new = feeds.save_arrangement(prefs, tabs, {"a", "b", "n"})
     assert new["order"] == ["b", "n", "a", "gone"]
     assert new["hidden"] == ["a", "gone"] and new["shown"] == ["gone-native", "n"] and new["other"] == 1
+
+
+def test_fair_share_splits_the_pool_between_networks():
+    posts = [mk("bluesky", f"b{i}", "x", ago=i * 0.01) for i in range(50)] + \
+            [mk("mastodon", f"m{i}", "y", ago=1 + i) for i in range(30)] + [mk("x", "x1", "z", ago=5)]
+    posts.sort(key=lambda p: -p.created_at)
+    out = feeds.fair_share(posts, 40)
+    by = {n: sum(p.network == n for p in out) for n in ("bluesky", "mastodon", "x")}
+    assert by == {"x": 1, "mastodon": 19, "bluesky": 20}
+    assert out == sorted(out, key=lambda p: -p.created_at)
+    assert feeds.fair_share(posts, 500) == posts
+    assert feeds.fair_share([], 10) == []
+
+
+def test_ctx_normalised_any_field_per_network():
+    posts = [mk("bluesky", str(i), "x") for i in range(4)] + [mk("mastodon", "m", "y")]
+    for i, p in enumerate(posts[:4]):
+        p.replies = i * 50
+    posts[4].replies = 2
+    ctx = feeds.Ctx(posts, set(), set())
+    assert ctx.normalised(posts[3], "replies") == 0.75
+    assert ctx.normalised(posts[4], lambda p: p.replies + p.quotes) == 0.0
+
+
+def test_unedited_starter_feeds_are_upgraded(tmp_path):
+    mine = tmp_path / "mine"
+    mine.mkdir()
+    old = OLD_LINKS_FEED
+    (mine / "links_and_reading.py").write_text(old.replace("\n", "\r\n"))
+    edited = tmp_path / "edited"
+    edited.mkdir()
+    (edited / "links_and_reading.py").write_text(old + "# mine\n")
+    assert feeds.upgrade_starters(mine) == ["links_and_reading"]
+    assert "ctx.normalised(post" in (mine / "links_and_reading.py").read_text()
+    assert feeds.upgrade_starters(edited) == []
+
+
+OLD_LINKS_FEED = '"""Posts that share a link, ranked by how much discussion they got. Good for a reading list."""\nfrom crossposter.feeds import Feed, Post, Ctx\n\nfeed = Feed(\n    name="Links worth reading",\n    description="Posts with a link card from your timelines, most discussed first.",\n    sources=["bluesky:following", "mastodon:home"],\n    window_hours=36,\n)\n\n\ndef keep(post: Post, ctx: Ctx) -> bool:\n    return post.card is not None\n\n\ndef score(post: Post, ctx: Ctx) -> dict:\n    return {\n        "discussion": ctx.log1p(post.replies + post.quotes) * 2,\n        "engagement": ctx.normalised_engagement(post),\n        "freshness": 1 / (ctx.age_hours(post) + 3),\n    }\n'
