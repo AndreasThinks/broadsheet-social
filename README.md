@@ -114,13 +114,16 @@ def score(post: Post, ctx: Ctx) -> dict:         # a number, or named terms that
 - **Post** has `text` (rich segments) and `plain_text`, `author`, `created_at`, `media`, `card`,
   `quote`, `likes`, `reposts`, `replies`, `quotes`, `is_reply`, `reposted_by`, `network`, `lang`.
 - **Ctx** helpers: `age_hours`, `normalised_engagement` (0 to 1, compared within the post's own
-  network, because Mastodon only reports counts your server has seen), `follows_who_engaged`
+  network, because Mastodon only reports counts your server has seen), `normalised` (the same for
+  any field or function, e.g. `ctx.normalised(post, "replies")`), `follows_who_engaged`
   (people you follow who reposted it), `is_mine`, `is_muted`, `log1p`, and `ctx.posts`. For
   cross-network feeds: `links` and `tags` (normalised), `networks_discussing` (every network where
   the post or its link shows up), `people_sharing_link`, `tag_networks`, and `seen_in` (which
   sources the post came from). The editor has a reference panel listing them all.
 - Feeds rank posts from a local cache that a background job keeps fresh (every 5 minutes, last 48
   hours), so they are fast and don't hammer the APIs. Ranking stops after `FEED_TIMEOUT_SECONDS`.
+- A feed ranks at most `limit` posts (300 by default), shared evenly between the networks it reads,
+  so a busy Bluesky timeline can't crowd Mastodon out before scoring (or the other way round).
 
 Feed code runs on your server with full Python, which is the point. Only you can edit it, behind
 your app password; don't load feed files from people you don't trust.

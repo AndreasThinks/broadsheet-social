@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import asyncio
 import bisect
+import hashlib
 import importlib.util
 import logging
 import math
@@ -43,7 +44,7 @@ class Feed:
     sources: list[str]
     window_hours: float = 24
     description: str = ""
-    limit: int = 300            # most posts to rank
+    limit: int = 300            # most posts to rank, shared evenly between the networks in sources
     include_replies: bool = True
 
 
@@ -61,6 +62,7 @@ class Ctx:
         for v in self._eng.values():
             v.sort()
         self._spread: dict[str, dict[str, set[str]]] | None = None
+        self._by_field: dict[str, dict[str, list[float]]] = {}
 
     def age_hours(self, post: Post) -> float:
         """How many hours ago the post was made."""
@@ -70,6 +72,24 @@ class Ctx:
         """0..1: the share of posts from the same network in this feed with less engagement."""
         values = self._eng.get(post.network) or [0]
         return bisect.bisect_left(values, post.engagement) / max(1, len(values))
+
+    def normalised(self, post: Post, value: str | Callable[[Post], float]) -> float:
+        """0..1: the share of posts from the same network in this feed with a lower value.
+
+        value is a Post field name like "replies", or a function of a post, e.g.
+        lambda p: p.replies + p.quotes. Use it instead of raw counts when mixing networks."""
+        if isinstance(value, str):
+            if value not in self._by_field:
+                by_net: dict[str, list[float]] = defaultdict(list)
+                for p in self.posts:
+                    by_net[p.network].append(getattr(p, value))
+                self._by_field[value] = {n: sorted(v) for n, v in by_net.items()}
+            values = self._by_field[value].get(post.network) or [0]
+            mine = getattr(post, value)
+        else:
+            values = sorted(value(p) for p in self.posts if p.network == post.network) or [0]
+            mine = value(post)
+        return bisect.bisect_left(values, mine) / max(1, len(values))
 
     def follows_who_engaged(self, post: Post) -> list[str]:
         """Handles of people you follow who reposted or boosted this post, as seen in your timelines."""
@@ -209,6 +229,9 @@ def _load(path: Path) -> LoadedFeed:
 def all_feeds(feeds_dir: Path | None = None) -> list[LoadedFeed]:
     """Every feed file, reloading any that changed on disk."""
     d = feeds_dir or settings.feeds_dir
+    if d not in _upgraded:
+        _upgraded.add(d)
+        upgrade_starters(d)
     out = [COMBINED]
     paths = sorted(d.glob("*.py")) if d.exists() else []
     out += [_cached_load(path) for path in paths if not path.name.startswith("_")]
@@ -239,6 +262,36 @@ def starter_feeds(feeds_dir: Path | None = None, starter_dir: Path | None = None
     removed = {p.stem.removeprefix("_removed_") for p in d.glob("_removed_*.py")} if d.exists() else set()
     return [_cached_load(p) for p in sorted(src.glob("*.py"))
             if not p.name.startswith("_") and p.stem not in have and p.stem not in removed]
+
+
+# sha256 of earlier versions of starter feeds. An installed copy that still matches one (you never
+# edited it) is replaced with the current version, so fixes reach feeds people already added.
+OLD_STARTERS = {
+    "links_and_reading": {"94ab27dc8cce87b7f59ea6df7dff33092d35ebbe7e01c8e291875098a800cdbf"},
+}
+_upgraded: set[Path] = set()
+
+
+def _digest(text: str) -> str:
+    return hashlib.sha256(text.replace("\r\n", "\n").encode()).hexdigest()
+
+
+def upgrade_starters(feeds_dir: Path | None = None, starter_dir: Path | None = None) -> list[str]:
+    """Update installed starter feeds you haven't edited to their latest version. Returns the slugs updated."""
+    d = feeds_dir or settings.feeds_dir
+    src = starter_dir or STARTER_DIR
+    if not src.exists() or not d.exists() or d.resolve() == src.resolve():
+        return []
+    done = []
+    for slug, old in OLD_STARTERS.items():
+        mine, new = d / f"{slug}.py", src / f"{slug}.py"
+        try:
+            if mine.is_file() and new.is_file() and _digest(mine.read_text(encoding="utf-8")) in old:
+                mine.write_text(new.read_text(encoding="utf-8"), encoding="utf-8")
+                done.append(slug)
+        except OSError as e:
+            log.warning("couldn't update starter feed %s: %s", slug, e)
+    return done
 
 
 def install_starter(slug: str, feeds_dir: Path | None = None, starter_dir: Path | None = None) -> bool:
@@ -311,6 +364,26 @@ def rank(lf: LoadedFeed, posts: list[Post], ctx: Ctx) -> list[Ranked]:
     return out
 
 
+def fair_share(posts: list[Post], limit: int) -> list[Post]:
+    """The newest `limit` posts, split evenly between networks so a busy one can't crowd out the rest.
+
+    A network with fewer posts than its share gives the spare slots to the others. Order is kept."""
+    counts: dict[str, int] = defaultdict(int)
+    for p in posts:
+        counts[p.network] += 1
+    quota: dict[str, int] = {}
+    left, nets = limit, sorted(counts, key=counts.get)
+    for i, n in enumerate(nets):
+        quota[n] = min(counts[n], left // (len(nets) - i))
+        left -= quota[n]
+    out = []
+    for p in posts:
+        if quota[p.network] > 0:
+            quota[p.network] -= 1
+            out.append(p)
+    return out
+
+
 _results: dict[str, tuple[float, list[Ranked]]] = {}
 
 
@@ -325,7 +398,7 @@ async def run(db, adapters, slug: str, fresh: bool = False) -> list[Ranked]:
     if hit and not fresh and time.time() - hit[0] < 120 and hit[0] > lf.mtime:
         return hit[1]
     await cache.refresh(db, adapters, lf.feed.sources)
-    posts = cache.collapse(cache.candidates(db, lf.feed.sources, lf.feed.window_hours))[: lf.feed.limit]
+    posts = fair_share(cache.collapse(cache.candidates(db, lf.feed.sources, lf.feed.window_hours)), lf.feed.limit)
     my = {a.rec.handle for a in adapters}
     ctx = Ctx(posts, my, set(db.get("muted", [])))
     try:
