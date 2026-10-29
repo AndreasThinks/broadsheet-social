@@ -64,6 +64,12 @@ class DemoAdapter(NetworkAdapter):
                                   image=f"https://picsum.photos/seed/card{seed}/600/315")
             if i % 7 == 3:
                 p.reposted_by = rnd.choice(people)
+            if i % 6 == 4 and out:
+                # Replies: Bluesky sends the post being answered along with the reply, Mastodon only its id.
+                parent = out[-1]
+                p.is_reply, p.reply_to_id, p.reply_to_handle = True, parent.id, parent.author.handle
+                if self.network == "bluesky":
+                    p.parent = parent
             out.append(p)
         return out
 
@@ -88,8 +94,19 @@ class DemoAdapter(NetworkAdapter):
                              post=posts[i] if kinds[i % 5] != "follow" else None) for i in range(5)]
 
     async def thread(self, post_id):
-        posts = self._posts(3, 6)
-        return posts[:1], posts[1], posts[2:]
+        posts = self._posts(3, 12)
+        for p in posts:
+            p.parent = None
+        ancestors, post, replies = posts[:1], posts[1], posts[2:]
+        post.is_reply, post.reply_to_id = True, ancestors[0].id
+        # Some replies answer the post, others answer each other, so the conversation has branches.
+        parents = [post, post, replies[0], replies[2], replies[0], post, replies[5], replies[0], replies[3], post]
+        for r, parent in zip(replies, parents):
+            r.is_reply, r.reply_to_id, r.reply_to_handle = True, parent.id, parent.author.handle
+        return ancestors, post, replies
+
+    async def get_post(self, post_id):
+        return self._posts(5, 1)[0]
 
     async def profile(self, handle):
         return next((p for p in _people() if p.handle == handle), _people()[0])

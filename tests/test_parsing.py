@@ -65,3 +65,22 @@ def test_normalise_instance():
     assert normalise_instance("https://Mastodon.Social/") == "mastodon.social"
     assert normalise_instance("@me@fosstodon.org") == "fosstodon.org"
     assert normalise_instance("hachyderm.io") == "hachyderm.io"
+
+
+def test_reply_parents_are_recorded():
+    from crossposter.adapters import bluesky, mastodon, x
+    author = {"did": "did:plc:a", "handle": "a.bsky.social"}
+    parent = {"uri": "at://did:plc:b/app.bsky.feed.post/1", "author": {"did": "did:plc:b", "handle": "b.bsky.social"},
+              "record": {"text": "the question", "createdAt": "2026-10-28T10:00:00Z"}}
+    pv = {"uri": "at://did:plc:a/app.bsky.feed.post/2", "author": author,
+          "record": {"text": "the answer", "createdAt": "2026-10-28T10:05:00Z",
+                     "reply": {"parent": {"uri": parent["uri"]}, "root": {"uri": parent["uri"]}}}}
+    p = bluesky.to_post(pv, "bluesky:me", reply={"parent": parent, "root": parent})
+    assert p.reply_to_id == parent["uri"] and p.parent.plain_text == "the question"
+    assert type(p).from_dict(p.to_dict()).parent.plain_text == "the question"
+    s = {"id": "9", "in_reply_to_id": "8", "in_reply_to_account_id": "2", "content": "<p>hi</p>",
+         "created_at": "2026-10-28T10:00:00Z", "account": {"id": "1", "acct": "a"}, "mentions": []}
+    assert mastodon.to_post(s, "mastodon:me", "m.social").reply_to_id == "8"
+    t = {"data": [{"id": "5", "text": "yes", "author_id": "1", "in_reply_to_user_id": "2",
+                   "referenced_tweets": [{"type": "replied_to", "id": "4"}]}]}
+    assert x._parse(t, "x:me")[0].reply_to_id == "4"

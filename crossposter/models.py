@@ -70,6 +70,8 @@ class Post:
     reposted_by: Account | None = None
     reply_to_handle: str = ""
     is_reply: bool = False
+    reply_to_id: str = ""        # native id of the post this replies to, when the network says
+    parent: Post | None = None   # that post itself, when the network sent it along (Bluesky timelines do)
     likes: int = 0
     reposts: int = 0
     replies: int = 0
@@ -145,6 +147,7 @@ def _post_from_dict(d: dict) -> Post:
     d["media"] = [_from(Media, m) for m in d.get("media") or []]
     d["card"] = _from(LinkCard, d.get("card"))
     d["quote"] = _post_from_dict(d["quote"]) if d.get("quote") else None
+    d["parent"] = _post_from_dict(d["parent"]) if d.get("parent") else None
     d["reposted_by"] = _from(Account, d.get("reposted_by"))
     return Post(**_known(Post, d))
 

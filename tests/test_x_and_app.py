@@ -132,3 +132,32 @@ def test_desktop_token_login(client):
         settings.app_password = ""
         settings.desktop = False
         client.cookies.clear()
+
+
+def test_conversation_nests_replies_and_marks_who_started_it(client):
+    r = client.get("/thread?key=demo-bluesky%7Cx")
+    assert r.status_code == 200
+    assert 'class="conversation"' in r.text and 'class="chain"' in r.text
+    assert 'class="branch"' in r.text and "more repl" in r.text  # side-branches fold after two replies
+    assert "10 replies" in r.text
+
+
+def test_replies_in_feed_show_what_they_answer(client):
+    r = client.get("/timeline?feed=bluesky:following&acct=demo-bluesky")
+    assert 'class="peek"' in r.text and "Show conversation" in r.text and "data-href=" in r.text
+    r = client.get("/timeline?feed=mastodon:home&acct=demo-mastodon")
+    assert 'hx-get="/peek?' in r.text  # Mastodon only gives the id, so the preview loads as you scroll
+
+
+def test_peek_loads_parent_and_falls_back(client):
+    from crossposter import cache
+    from crossposter.app import db
+    from crossposter.models import Account, Post
+    child = Post(network="mastodon", id="c1", account_id="demo-mastodon", created_at=0, is_reply=True,
+                 reply_to_id="p1", reply_to_handle="grace@hachyderm.io",
+                 author=Account(network="mastodon", id="1", handle="ada@x.y"))
+    cache.save_posts(db, [child])
+    r = client.get("/peek?key=demo-mastodon%7Cp1&child=demo-mastodon%7Cc1")
+    assert 'class="peek"' in r.text and "/thread?key=demo-mastodon%7Cc1" in r.text
+    r = client.get("/peek?key=gone%7Cp1&child=demo-mastodon%7Cc1")
+    assert "Replying to" in r.text and 'class="peek"' not in r.text

@@ -381,6 +381,16 @@
       if (e.target.id === "images") updateAltFields(e.target);
       if (e.target.closest && e.target.closest("#compose-form")) updateCounts();
     });
+    // Tapping a post anywhere that isn't a link, button or picture opens its conversation.
+    document.addEventListener("click", function (e) {
+      var card = e.target.closest && e.target.closest(".post[data-href]");
+      if (!card || e.defaultPrevented || e.button !== 0) return;
+      if (e.target.closest("a, button, input, textarea, select, label, summary, video, audio, img, .media, .why")) return;
+      var sel = window.getSelection && window.getSelection();
+      if (sel && String(sel).length) return;
+      if (e.metaKey || e.ctrlKey) window.open(card.dataset.href, "_blank");
+      else location.href = card.dataset.href;
+    });
     // Copy buttons: data-copy names the field to copy.
     document.addEventListener("click", function (e) {
       var b = e.target.closest && e.target.closest("[data-copy]");
