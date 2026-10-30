@@ -228,13 +228,11 @@ jobs:
           ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
           ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
           ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
-          ANDROID_RELEASE_MIGRATION_CONFIRMED: ${{ secrets.ANDROID_RELEASE_MIGRATION_CONFIRMED }}
         run: |
           for name in ANDROID_KEYSTORE_BASE64 ANDROID_KEYSTORE_PASSWORD ANDROID_KEY_ALIAS ANDROID_KEY_PASSWORD; do
             eval "value=\${$name}"
             test -n "$value" || { echo "$name is required"; exit 1; }
           done
-          test "$ANDROID_RELEASE_MIGRATION_CONFIRMED" = yes || { echo 'Migration gate is not confirmed'; exit 1; }
           mkdir -p "$RUNNER_TEMP/android-signing"
           printf '%s' "$ANDROID_KEYSTORE_BASE64" | base64 --decode > "$RUNNER_TEMP/android-signing/release.keystore"
           test -s "$RUNNER_TEMP/android-signing/release.keystore"
@@ -271,5 +269,5 @@ jobs:
           if gh release view "$tag" >/dev/null 2>&1; then echo "Refusing to overwrite existing release $tag"; exit 1; fi
           gh release create "$tag" release/Broadsheet-${VERSION_NAME}.apk \
             --title "Broadsheet Android ${VERSION_NAME}" \
-            --notes "Signed Android APK for Obtainium. Install only after completing the signer migration; legacy installs may need uninstalling first." \
+            --notes "New installs only. No supported migration from existing Android installs; do not uninstall the legacy app. The legacy website download remains available." \
             --target "$GITHUB_SHA"
