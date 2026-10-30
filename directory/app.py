@@ -36,7 +36,7 @@ REPO = ROOT.parent
 WEB = REPO / "web"
 DATA_DIR = Path(os.environ.get("DATA_DIR", "directory-data"))
 ADMIN_PASSWORD = os.environ.get("ADMIN_PASSWORD", "")
-SOURCE_URL = "https://github.com/AndreasThinks/cross-poster-"
+SOURCE_URL = "https://github.com/AndreasThinks/broadsheet-social"
 NETS = {"bluesky": "Bluesky", "mastodon": "Mastodon", "x": "X"}
 
 store = Store(DATA_DIR / "directory.db")

@@ -11,7 +11,7 @@ import httpx
 from ..crypto import decrypt_json, encrypt_json
 from ..models import Account, FeedInfo, Notification, Page, Post
 
-USER_AGENT = "cross-poster/0.1 (+https://github.com/AndreasThinks/cross-poster-)"
+USER_AGENT = "Broadsheet/0.1 (+https://github.com/AndreasThinks/broadsheet-social)"
 _client: httpx.AsyncClient | None = None
 
 
