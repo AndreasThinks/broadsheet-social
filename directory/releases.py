@@ -23,7 +23,9 @@ from joserfc.jwk import KeySet
 
 ISSUER = "https://token.actions.githubusercontent.com"
 AUDIENCE = "broadsheet-releases"
-REPOSITORY = os.environ.get("RELEASE_REPOSITORY", "AndreasThinks/cross-poster-")
+# During the GitHub repository rename, both names are valid only under the original
+# account and on main. Keep the owner-id and ref checks below: names alone are not identity.
+REPOSITORIES = frozenset({"AndreasThinks/cross-poster-", "AndreasThinks/broadsheet-social"})
 OWNER_ID = os.environ.get("RELEASE_OWNER_ID", "3072143")  # survives the account being renamed and the name reused
 REF = "refs/heads/main"
 
@@ -133,7 +135,8 @@ def verify(authorization: str, commit: str) -> dict:
     except httpx.HTTPError as e:
         raise Refused(f"couldn't fetch GitHub's signing keys: {e}", 503)
     c = decoded.claims
-    if (str(c.get("repository", "")).lower() != REPOSITORY.lower() or str(c.get("repository_owner_id")) != OWNER_ID
+    repository = str(c.get("repository", "")).casefold()
+    if (repository not in {name.casefold() for name in REPOSITORIES} or str(c.get("repository_owner_id")) != OWNER_ID
             or c.get("ref") != REF):
         raise Refused("only the main branch of the Broadsheet repo can publish", 403)
     if c.get("sha") != commit:
