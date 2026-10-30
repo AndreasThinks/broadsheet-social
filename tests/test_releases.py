@@ -24,7 +24,7 @@ def site(tmp_path, monkeypatch):
 
 
 def token(**over):
-    claims = {"iss": rel.ISSUER, "aud": rel.AUDIENCE, "exp": int(time.time()) + 300, "repository": rel.REPOSITORY,
+    claims = {"iss": rel.ISSUER, "aud": rel.AUDIENCE, "exp": int(time.time()) + 300, "repository": sorted(rel.REPOSITORIES)[0],
               "repository_owner_id": rel.OWNER_ID, "ref": "refs/heads/main", "sha": SHA} | over
     return {"Authorization": "Bearer " + jwt.encode({"alg": "RS256", "kid": "test"}, claims, KEY)}
 
@@ -75,6 +75,25 @@ def test_only_main_of_the_repo_can_upload(site, over, status):
     c, _ = site
     r = c.put(f"/api/releases/{SHA}/manifest.json", content=b"{}", headers=token(**over))
     assert r.status_code == status, r.text
+
+
+@pytest.mark.parametrize("repository", sorted(rel.REPOSITORIES))
+def test_rename_allowlist_accepts_both_repo_names(site, repository):
+    c, _ = site
+    response = c.put(f"/api/releases/{SHA}/manifest.json", content=b"{}",
+                     headers=token(repository=repository))
+    assert response.status_code == 200, response.text
+
+
+def test_rename_allowlist_still_requires_original_owner_and_main(site):
+    c, _ = site
+    for claims in (
+        {"repository": "attacker/broadsheet-social"},
+        {"repository": "AndreasThinks/broadsheet-social", "repository_owner_id": "1"},
+        {"repository": "AndreasThinks/broadsheet-social", "ref": "refs/heads/release"},
+    ):
+        response = c.put(f"/api/releases/{SHA}/manifest.json", content=b"{}", headers=token(**claims))
+        assert response.status_code == 403, response.text
 
 
 def test_refuses_unsigned_strange_or_incomplete_uploads(site):
