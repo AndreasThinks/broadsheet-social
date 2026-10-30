@@ -18,8 +18,10 @@ fun gitCommitTime(): Int = try {
     (System.currentTimeMillis() / 1000).toInt()
 }
 
-// Commit time in minutes since 2024 keeps versionCode rising with every push to main, within Int range.
-val buildVersionCode = ((gitCommitTime() - 1704067200) / 60).coerceAtLeast(1)
+// CI supplies a monotonic GitHub Actions run number for published APKs. Local builds use
+// commit time as a deterministic fallback; it is not used for releases.
+val buildVersionCode = providers.environmentVariable("VERSION_CODE").orNull?.toIntOrNull()
+    ?: ((gitCommitTime() - 1704067200) / 60).coerceAtLeast(1)
 
 val copyAppCode by tasks.registering(Sync::class) {
     from(repoRoot) {
@@ -43,30 +45,19 @@ android {
     }
 
     signingConfigs {
-        // A shared debug key, committed so every build (local or CI) can install over the last one.
-        getByName("debug") {
-            storeFile = rootProject.file("shared-debug.keystore")
-            storePassword = "android"
-            keyAlias = "androiddebugkey"
-            keyPassword = "android"
-        }
-        // For wider distribution, set these from repository secrets to sign with a private key instead.
-        // Switching keys means uninstalling once, as Android only accepts updates signed by the same key.
-        val keystore = providers.environmentVariable("ANDROID_KEYSTORE_FILE").orNull
-        if (keystore != null) {
-            create("release") {
-                storeFile = file(keystore)
-                storePassword = providers.environmentVariable("ANDROID_KEYSTORE_PASSWORD").get()
-                keyAlias = providers.environmentVariable("ANDROID_KEY_ALIAS").get()
-                keyPassword = providers.environmentVariable("ANDROID_KEY_PASSWORD").get()
-            }
+        // Release artifacts must never silently fall back to the public debug signing key.
+        create("release") {
+            storeFile = file(providers.environmentVariable("ANDROID_KEYSTORE_FILE").orElse("missing-release.keystore").get())
+            storePassword = providers.environmentVariable("ANDROID_KEYSTORE_PASSWORD").orElse("").get()
+            keyAlias = providers.environmentVariable("ANDROID_KEY_ALIAS").orElse("").get()
+            keyPassword = providers.environmentVariable("ANDROID_KEY_PASSWORD").orElse("").get()
         }
     }
 
     buildTypes {
         release {
             isMinifyEnabled = false
-            signingConfig = signingConfigs.findByName("release") ?: signingConfigs.getByName("debug")
+            signingConfig = signingConfigs.getByName("release")
         }
     }
 

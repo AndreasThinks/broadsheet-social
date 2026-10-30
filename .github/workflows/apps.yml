@@ -108,10 +108,51 @@ jobs:
         with:
           python-version: "3.13"  # Chaquopy needs the same Python version on the build machine
       - uses: gradle/actions/setup-gradle@v4
+      - name: Build debug APK for pull requests
+        if: github.event_name == 'pull_request'
+        working-directory: android
+        env:
+          VERSION_CODE: ${{ github.run_number }}
+          VERSION_NAME: 0.1.${{ github.run_number }}
+        run: ./gradlew assembleDebug --console=plain
+      - name: Prepare production signing key
+        if: github.event_name != 'pull_request'
+        env:
+          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+          ANDROID_RELEASE_MIGRATION_CONFIRMED: ${{ secrets.ANDROID_RELEASE_MIGRATION_CONFIRMED }}
+        run: |
+          for name in ANDROID_KEYSTORE_BASE64 ANDROID_KEYSTORE_PASSWORD ANDROID_KEY_ALIAS ANDROID_KEY_PASSWORD; do
+            eval "value=\${$name}"
+            test -n "$value" || { echo "$name is required for production APK releases"; exit 1; }
+          done
+          test "$ANDROID_RELEASE_MIGRATION_CONFIRMED" = 'yes' || {
+            echo 'Set ANDROID_RELEASE_MIGRATION_CONFIRMED=yes only after existing APK users have been informed to uninstall before installing the new signer.'
+            exit 1
+          }
+          mkdir -p "$RUNNER_TEMP/android-signing"
+          printf '%s' "$ANDROID_KEYSTORE_BASE64" | base64 --decode > "$RUNNER_TEMP/android-signing/release.keystore"
+          test -s "$RUNNER_TEMP/android-signing/release.keystore"
       - name: Build APK
         working-directory: android
+        if: github.event_name != 'pull_request'
+        env:
+          ANDROID_KEYSTORE_FILE: ${{ runner.temp }}/android-signing/release.keystore
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+          VERSION_CODE: ${{ github.run_number }}
+          VERSION_NAME: 0.1.${{ github.run_number }}
         run: ./gradlew assembleRelease --console=plain
-      - run: cp android/app/build/outputs/apk/release/app-release.apk Broadsheet-android.apk
+      - name: Stage APK artifact
+        run: |
+          if [ "$GITHUB_EVENT_NAME" = pull_request ]; then
+            cp android/app/build/outputs/apk/debug/app-debug.apk Broadsheet-android.apk
+          else
+            cp android/app/build/outputs/apk/release/app-release.apk Broadsheet-android.apk
+          fi
       - uses: actions/upload-artifact@v4
         with:
           name: app-android
