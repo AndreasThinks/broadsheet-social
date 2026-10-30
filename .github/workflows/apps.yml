@@ -7,6 +7,12 @@ on:
     branches: [main]
   pull_request:
   workflow_dispatch:
+    inputs:
+      publish_android_release:
+        description: Build and publish a versioned Android APK release (only after signer migration is verified)
+        required: true
+        type: boolean
+        default: false
 
 permissions:
   contents: write
@@ -97,6 +103,7 @@ jobs:
           path: Broadsheet-${{ matrix.platform }}.zip
 
   android:
+    if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -115,44 +122,8 @@ jobs:
           VERSION_CODE: ${{ github.run_number }}
           VERSION_NAME: 0.1.${{ github.run_number }}
         run: ./gradlew assembleDebug --console=plain
-      - name: Prepare production signing key
-        if: github.event_name != 'pull_request'
-        env:
-          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
-          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
-          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
-          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
-          ANDROID_RELEASE_MIGRATION_CONFIRMED: ${{ secrets.ANDROID_RELEASE_MIGRATION_CONFIRMED }}
-        run: |
-          for name in ANDROID_KEYSTORE_BASE64 ANDROID_KEYSTORE_PASSWORD ANDROID_KEY_ALIAS ANDROID_KEY_PASSWORD; do
-            eval "value=\${$name}"
-            test -n "$value" || { echo "$name is required for production APK releases"; exit 1; }
-          done
-          test "$ANDROID_RELEASE_MIGRATION_CONFIRMED" = 'yes' || {
-            echo 'Set ANDROID_RELEASE_MIGRATION_CONFIRMED=yes only after existing APK users have been informed to uninstall before installing the new signer.'
-            exit 1
-          }
-          mkdir -p "$RUNNER_TEMP/android-signing"
-          printf '%s' "$ANDROID_KEYSTORE_BASE64" | base64 --decode > "$RUNNER_TEMP/android-signing/release.keystore"
-          test -s "$RUNNER_TEMP/android-signing/release.keystore"
-      - name: Build APK
-        working-directory: android
-        if: github.event_name != 'pull_request'
-        env:
-          ANDROID_KEYSTORE_FILE: ${{ runner.temp }}/android-signing/release.keystore
-          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
-          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
-          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
-          VERSION_CODE: ${{ github.run_number }}
-          VERSION_NAME: 0.1.${{ github.run_number }}
-        run: ./gradlew assembleRelease --console=plain
-      - name: Stage APK artifact
-        run: |
-          if [ "$GITHUB_EVENT_NAME" = pull_request ]; then
-            cp android/app/build/outputs/apk/debug/app-debug.apk Broadsheet-android.apk
-          else
-            cp android/app/build/outputs/apk/release/app-release.apk Broadsheet-android.apk
-          fi
+      - name: Stage debug APK artifact
+        run: cp android/app/build/outputs/apk/debug/app-debug.apk Broadsheet-android.apk
       - uses: actions/upload-artifact@v4
         with:
           name: app-android
@@ -162,6 +133,7 @@ jobs:
     # Installs the APK on an emulator and checks the app's server starts. Kept out of the publish path:
     # hosted-runner emulators sometimes fail to boot, and that shouldn't hold back a release.
     needs: android
+    if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -192,8 +164,8 @@ jobs:
           if-no-files-found: ignore
 
   publish:
-    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
-    needs: [bundle, desktop, android]
+    if: (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && github.ref == 'refs/heads/main'
+    needs: [bundle, desktop]
     runs-on: ubuntu-latest
     env:
       SITE: https://broadsheet-feeds-production.up.railway.app
@@ -212,12 +184,15 @@ jobs:
             sleep 15
           done
           echo "The website isn't answering at $SITE"; exit 1
+      - name: Carry forward the existing legacy Android APK unchanged
+        run: curl -fL --retry 4 --retry-all-errors "$SITE/downloads/Broadsheet-android.apk" -o out/Broadsheet-android.apk
       - name: Upload to the website
         run: |
           token() {
             curl -fsS -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
               "$ACTIONS_ID_TOKEN_REQUEST_URL&audience=broadsheet-releases" | jq -r .value
           }
+          # Carry forward the exact existing signer until migration is verified; never replace it with a new signer here.
           for f in Broadsheet-windows.zip Broadsheet-macos.zip Broadsheet-android.apk crossposter-app.zip manifest.json; do
             echo "Uploading $f ($(du -h "out/$f" | cut -f1))"
             curl -fsS --retry 4 --retry-all-errors -X PUT -H "Authorization: Bearer $(token)" \
@@ -231,3 +206,68 @@ jobs:
             gh release create desktop-latest --title "Broadsheet apps" --notes "Downloads: $SITE/" --target "$GITHUB_SHA"
           gh release upload desktop-latest out/Broadsheet-windows.zip out/Broadsheet-macos.zip out/Broadsheet-android.apk out/crossposter-app.zip --clobber
           gh release upload desktop-latest out/manifest.json --clobber
+
+  android-release:
+    if: github.event_name == 'workflow_dispatch' && inputs.publish_android_release
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - uses: gradle/actions/setup-gradle@v4
+      - name: Verify signing credentials and migration gate
+        env:
+          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+          ANDROID_RELEASE_MIGRATION_CONFIRMED: ${{ secrets.ANDROID_RELEASE_MIGRATION_CONFIRMED }}
+        run: |
+          for name in ANDROID_KEYSTORE_BASE64 ANDROID_KEYSTORE_PASSWORD ANDROID_KEY_ALIAS ANDROID_KEY_PASSWORD; do
+            eval "value=\${$name}"
+            test -n "$value" || { echo "$name is required"; exit 1; }
+          done
+          test "$ANDROID_RELEASE_MIGRATION_CONFIRMED" = yes || { echo 'Migration gate is not confirmed'; exit 1; }
+          mkdir -p "$RUNNER_TEMP/android-signing"
+          printf '%s' "$ANDROID_KEYSTORE_BASE64" | base64 --decode > "$RUNNER_TEMP/android-signing/release.keystore"
+          test -s "$RUNNER_TEMP/android-signing/release.keystore"
+      - name: Build signed release APK
+        working-directory: android
+        env:
+          ANDROID_KEYSTORE_FILE: ${{ runner.temp }}/android-signing/release.keystore
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+          # Reserve three decimal digits per run for reruns; starts well above legacy code (< 1,000,000).
+          VERSION_CODE: ${{ github.run_number * 1000 + github.run_attempt }}
+          VERSION_NAME: 0.2.${{ github.run_number }}.${{ github.run_attempt }}
+        run: ./gradlew assembleRelease --console=plain
+      - name: Validate APK and stage Obtainium asset
+        env:
+          VERSION_CODE: ${{ github.run_number * 1000 + github.run_attempt }}
+          VERSION_NAME: 0.2.${{ github.run_number }}.${{ github.run_attempt }}
+        run: |
+          apk=android/app/build/outputs/apk/release/app-release.apk
+          test -s "$apk"
+          apksigner verify --verbose "$apk"
+          aapt dump badging "$apk" | grep -F "package: name='com.andreasthinks.crossposter' versionCode='$VERSION_CODE' versionName='$VERSION_NAME'"
+          mkdir -p release
+          cp "$apk" release/Broadsheet-${VERSION_NAME}.apk
+      - name: Publish immutable versioned GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION_NAME: 0.2.${{ github.run_number }}.${{ github.run_attempt }}
+        run: |
+          tag="android-v${VERSION_NAME}"
+          if gh release view "$tag" >/dev/null 2>&1; then echo "Refusing to overwrite existing release $tag"; exit 1; fi
+          gh release create "$tag" release/Broadsheet-${VERSION_NAME}.apk \
+            --title "Broadsheet Android ${VERSION_NAME}" \
+            --notes "Signed Android APK for Obtainium. Install only after completing the signer migration; legacy installs may need uninstalling first." \
+            --target "$GITHUB_SHA"
