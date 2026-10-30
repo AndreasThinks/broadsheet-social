@@ -9,7 +9,7 @@ on:
   workflow_dispatch:
     inputs:
       publish_android_release:
-        description: Build and publish a versioned Android APK release (only after signer migration is verified)
+        description: Publish a signed APK for new installs only; existing debug-signed installs cannot update
         required: true
         type: boolean
         default: false
@@ -257,7 +257,10 @@ jobs:
           test -s "$apk"
           export PATH="$ANDROID_HOME/build-tools/$(ls "$ANDROID_HOME/build-tools" | sort -V | tail -n 1):$PATH"
           apksigner verify --verbose "$apk"
-          aapt dump badging "$apk" | grep -F "package: name='com.andreasthinks.crossposter' versionCode='$VERSION_CODE' versionName='$VERSION_NAME'"
+          badging=$(aapt dump badging "$apk")
+          package_line=$(printf '%s\n' "$badging" | grep -E "^package:.*name='com\.andreasthinks\.crossposter'")
+          printf '%s\n' "$package_line" | grep -Eq "(^| )versionCode='$VERSION_CODE'( |$)"
+          printf '%s\n' "$package_line" | grep -Eq "(^| )versionName='$VERSION_NAME'( |$)"
           mkdir -p release
           cp "$apk" release/Broadsheet-${VERSION_NAME}.apk
       - name: Publish immutable versioned GitHub release
