@@ -208,7 +208,7 @@ jobs:
           gh release upload desktop-latest out/manifest.json --clobber
 
   android-release:
-    if: github.event_name == 'workflow_dispatch' && inputs.publish_android_release
+    if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' && inputs.publish_android_release
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -245,17 +245,19 @@ jobs:
           ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
           ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
           ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
-          # Reserve three decimal digits per run for reruns; starts well above legacy code (< 1,000,000).
-          VERSION_CODE: ${{ github.run_number * 1000 + github.run_attempt }}
-          VERSION_NAME: 0.2.${{ github.run_number }}.${{ github.run_attempt }}
-        run: ./gradlew assembleRelease --console=plain
-      - name: Validate APK and stage Obtainium asset
-        env:
-          VERSION_CODE: ${{ github.run_number * 1000 + github.run_attempt }}
           VERSION_NAME: 0.2.${{ github.run_number }}.${{ github.run_attempt }}
         run: |
+          # Reserve three decimal digits per run for reruns; starts well above legacy code (< 1,000,000).
+          echo "VERSION_CODE=$((GITHUB_RUN_NUMBER * 1000 + GITHUB_RUN_ATTEMPT))" >> "$GITHUB_ENV"
+          ./gradlew assembleRelease --console=plain
+      - name: Validate APK and stage Obtainium asset
+        env:
+          VERSION_NAME: 0.2.${{ github.run_number }}.${{ github.run_attempt }}
+        run: |
+          VERSION_CODE=$((GITHUB_RUN_NUMBER * 1000 + GITHUB_RUN_ATTEMPT))
           apk=android/app/build/outputs/apk/release/app-release.apk
           test -s "$apk"
+          export PATH="$ANDROID_HOME/build-tools/$(ls "$ANDROID_HOME/build-tools" | sort -V | tail -n 1):$PATH"
           apksigner verify --verbose "$apk"
           aapt dump badging "$apk" | grep -F "package: name='com.andreasthinks.crossposter' versionCode='$VERSION_CODE' versionName='$VERSION_NAME'"
           mkdir -p release
