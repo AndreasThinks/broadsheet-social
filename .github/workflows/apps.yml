@@ -246,7 +246,7 @@ jobs:
           VERSION_NAME: 0.2.${{ github.run_number }}.${{ github.run_attempt }}
         run: |
           # Reserve three decimal digits per run for reruns; starts well above legacy code (< 1,000,000).
-          echo "VERSION_CODE=$((GITHUB_RUN_NUMBER * 1000 + GITHUB_RUN_ATTEMPT))" >> "$GITHUB_ENV"
+          export VERSION_CODE=$((GITHUB_RUN_NUMBER * 1000 + GITHUB_RUN_ATTEMPT))
           ./gradlew assembleRelease --console=plain
       - name: Validate APK and stage Obtainium asset
         env:
