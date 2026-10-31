@@ -4,7 +4,7 @@ from __future__ import annotations
 import random
 import time
 
-from ..models import Account, FeedInfo, LinkCard, Media, Notification, Page, Post
+from ..models import Account, FeedInfo, LinkCard, Media, Notification, Page, Poll, PollOption, Post
 from ..richtext import plain_segments
 from .base import AccountRecord, NetworkAdapter, PostResult
 
@@ -22,6 +22,7 @@ TEXTS = [
     "Reminder that alt text is for everyone. Describe your images!",
     "Spent the afternoon debugging DPoP nonces. Learned a lot, enjoyed little.",
     "Our meetup is next Thursday, all welcome. Details: https://example.org/meetup #python",
+    "Quick poll: how do you read your timeline?",
 ]
 
 
@@ -64,6 +65,13 @@ class DemoAdapter(NetworkAdapter):
                 p.card = LinkCard(url="https://example.com/blog/tiny-ssg", title="A tiny static site generator",
                                   description="Two hundred lines of Python, no build step, no regrets.",
                                   image=f"https://picsum.photos/seed/card{seed}/600/315")
+            if "poll" in text and self.network == "mastodon":
+                votes = [rnd.randint(0, 80) for _ in range(3)]
+                p.poll = Poll(id=f"poll-{seed}-{i}", options=[PollOption("Newest first", votes[0]),
+                                                              PollOption("Ranked by a feed", votes[1]),
+                                                              PollOption("I don't, I post and run", votes[2])],
+                              votes=sum(votes), voters=sum(votes), expires_at=now + rnd.randint(3600, 86400 * 3),
+                              can_vote=True)
             if i % 7 == 3:
                 p.reposted_by = rnd.choice(people)
             if i % 6 == 4 and out:
@@ -132,3 +140,12 @@ class DemoAdapter(NetworkAdapter):
 
     async def repost(self, post, on):
         return None
+
+    async def vote(self, post, choices):
+        poll = post.poll
+        for c in choices:
+            poll.options[c].votes = (poll.options[c].votes or 0) + 1
+        poll.votes += len(choices)
+        poll.voters = (poll.voters or 0) + 1
+        poll.voted, poll.own_votes = True, list(choices)
+        return poll

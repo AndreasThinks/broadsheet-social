@@ -10,7 +10,7 @@ from bs4 import BeautifulSoup
 
 from ..config import settings
 from ..crypto import pkce_pair
-from ..models import Account, FeedInfo, LinkCard, Media, Notification, Page, Post
+from ..models import Account, FeedInfo, LinkCard, Media, Notification, Page, Poll, PollOption, Post
 from ..richtext import mastodon_segments, split_for_thread
 from .base import AccountRecord, NetworkAdapter, NetworkError, PostResult, Upload, http, parse_time, save_account
 
@@ -148,6 +148,17 @@ def _media(m: dict) -> Media:
                  alt=m.get("description") or "", width=meta.get("width"), height=meta.get("height"))
 
 
+def to_poll(p: dict | None) -> Poll | None:
+    if not isinstance(p, dict) or not p.get("options"):
+        return None
+    return Poll(id=str(p.get("id", "")),
+                options=[PollOption(title=o.get("title") or "", votes=o.get("votes_count")) for o in p["options"]],
+                votes=p.get("votes_count") or 0, voters=p.get("voters_count"), multiple=bool(p.get("multiple")),
+                expires_at=parse_time(p["expires_at"]) if p.get("expires_at") else None,
+                expired=bool(p.get("expired")), voted=bool(p.get("voted")),
+                own_votes=[int(i) for i in p.get("own_votes") or []], can_vote=bool(p.get("id")))
+
+
 def to_post(s: dict, account_id: str, host: str) -> Post:
     if s.get("reblog"):
         p = to_post(s["reblog"], account_id, host)
@@ -171,7 +182,7 @@ def to_post(s: dict, account_id: str, host: str) -> Post:
         url=s.get("url") or s.get("uri") or "", media=[_media(m) for m in s.get("media_attachments") or []],
         card=LinkCard(url=card["url"], title=card.get("title") or "", description=card.get("description") or "",
                       image=card.get("image") or "") if card else None,
-        quote=quote, is_reply=bool(s.get("in_reply_to_id")), reply_to_handle=reply_handle,
+        quote=quote, poll=to_poll(s.get("poll")), is_reply=bool(s.get("in_reply_to_id")), reply_to_handle=reply_handle,
         reply_to_id=str(s.get("in_reply_to_id") or ""),
         likes=s.get("favourites_count") or 0, reposts=s.get("reblogs_count") or 0,
         replies=s.get("replies_count") or 0, quotes=s.get("quotes_count") or 0,
@@ -352,3 +363,9 @@ class MastodonAdapter(NetworkAdapter):
 
     async def repost(self, post: Post, on: bool) -> None:
         await self._req("POST", f"/api/v1/statuses/{post.id}/{'reblog' if on else 'unreblog'}")
+
+    async def vote(self, post: Post, choices: list[int]) -> Poll:
+        if not post.poll:
+            raise NetworkError("That post has no poll.")
+        r = await self._req("POST", f"/api/v1/polls/{post.poll.id}/votes", json={"choices": [str(c) for c in choices]})
+        return to_poll(r.json())

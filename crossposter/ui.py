@@ -7,10 +7,11 @@ from html import escape
 from datetime import datetime
 from urllib.parse import quote, urlencode
 
-from fasthtml.common import (A, Article, Aside, Button, Details, Div, Footer, Header, Img, Li, Main, Nav, P, Script,
+from fasthtml.common import (A, Article, Aside, Button, Details, Div, Footer, Form, Header, Img, Input, Label, Li, Main,
+                             Nav, P, Script,
                              Section, Small, Span, Strong, Summary, Title, Ul, Video, NotStr)
 
-from .models import Account, Notification, Post, Segment
+from .models import Account, Notification, Poll, Post, Segment
 
 NETWORK_LABELS = {"bluesky": "Bluesky", "mastodon": "Mastodon", "x": "X"}
 
@@ -153,13 +154,77 @@ def link_card(post: Post):
              href=safe(c.url), target="_blank", rel="noopener noreferrer", cls="card" + (" card-img" if c.image else ""))
 
 
+def time_left(ts: float) -> str:
+    d = ts - time.time()
+    if d < 60:
+        return "ends in under a minute"
+    if d < 3600:
+        return f"{int(d // 60)} min left"
+    if d < 86400:
+        n = int(d // 3600)
+        return f"{n} hour{'s' if n != 1 else ''} left"
+    n = int(d // 86400)
+    return f"{n} day{'s' if n != 1 else ''} left"
+
+
+def poll_block(post: Post, show_results: bool = False, error: str = ""):
+    """A poll: tick boxes to vote while it is open and you haven't voted, otherwise bars with each option's share."""
+    poll: Poll | None = post.poll
+    if not poll or not poll.options:
+        return None
+    k = urlencode({"key": post.key})
+    people = poll.people
+    status = [f"{people:,} {'person' if people == 1 else 'people'}" if poll.voters is not None or not poll.multiple
+              else f"{poll.votes:,} vote{'s' if poll.votes != 1 else ''}"]
+    if poll.closed:
+        status.append("Final results")
+    elif poll.expires_at:
+        status.append(time_left(poll.expires_at))
+    votable = poll.can_vote and not poll.closed and not poll.voted
+    if votable and not show_results:
+        kind = "checkbox" if poll.multiple else "radio"
+        rows = [Label(Input(type=kind, name="choice", value=str(i)), Span(o.title, cls="poll-title"), cls="poll-pick")
+                for i, o in enumerate(poll.options)]
+        return Form(*rows,
+                    Div(Button("Vote", type="submit", cls="poll-vote"),
+                        Button("See results", type="button", cls="poll-link", hx_get=f"/act/poll?{k}&results=1",
+                               hx_target="closest .poll", hx_swap="outerHTML"),
+                        Small(" · ".join(status) + (" · choose any" if poll.multiple else ""), cls="poll-meta"),
+                        cls="poll-foot"),
+                    Small(error, cls="error-inline") if error else None,
+                    hx_post=f"/act/vote?{k}", hx_target="this", hx_swap="outerHTML", cls="poll")
+    total = poll.votes or 0
+    counts = [o.votes for o in poll.options]
+    hidden = any(c is None for c in counts)
+    top = max((c or 0 for c in counts), default=0)
+    rows = []
+    for i, o in enumerate(poll.options):
+        share = round(100 * (o.votes or 0) / total) if total and not hidden else 0
+        mine = i in poll.own_votes
+        cls = "poll-row" + (" poll-lead" if not hidden and top and o.votes == top else "") + (" poll-mine" if mine else "")
+        rows.append(Div(Div(cls="poll-bar", style=f"width:{share}%"),
+                        Span(Strong("—" if hidden else f"{share}%", cls="poll-pct"),
+                             Span(o.title, cls="poll-title"),
+                             Span("✓", cls="poll-check", title="Your vote") if mine else None, cls="poll-label"),
+                        cls=cls, title=None if hidden else f"{o.votes:,} vote{'s' if o.votes != 1 else ''}"))
+    foot = [Small(" · ".join(status), cls="poll-meta")]
+    if votable:
+        foot.insert(0, Button("Back to voting", type="button", cls="poll-link", hx_get=f"/act/poll?{k}",
+                              hx_target="closest .poll", hx_swap="outerHTML"))
+    elif not poll.can_vote and not poll.closed and post.network == "x":
+        foot.append(A("Vote on X", href=safe(post.url), target="_blank", rel="noopener", cls="poll-link"))
+    return Div(*rows, Div(*foot, cls="poll-foot"), Small(error, cls="error-inline") if error else None, cls="poll")
+
+
 def quote_card(post: Post):
     q = post.quote
     if not q:
         return None
     return A(Div(avatar(q.author, "xs"), Strong(q.author.name), Small(" ", q.author.at_handle, " · ", ago(q.created_at)),
                  cls="quote-head"),
-             rich_text(q.text, q.network, q.account_id), media_grid(q), href=thread_url(q), cls="quote")
+             rich_text(q.text, q.network, q.account_id), media_grid(q),
+             Div(f"Poll · {len(q.poll.options)} options", cls="poll-mini") if q.poll else None,
+             href=thread_url(q), cls="quote")
 
 
 def action_bar(post: Post):
@@ -235,7 +300,8 @@ def post_card(post: Post, score: tuple[float, dict] | None = None, focus: bool =
         lines.append(reply_context(post))
     elif post.reply_to_handle and not in_thread and not focus:
         lines.append(replying_to(post))
-    body = [rich_text(post.text, post.network, post.account_id), media_grid(post), link_card(post), quote_card(post)]
+    body = [rich_text(post.text, post.network, post.account_id), media_grid(post), poll_block(post), link_card(post),
+            quote_card(post)]
     if post.content_warning or post.sensitive:
         body = [Details(Summary(post.content_warning or "Sensitive content", cls="cw"), *body)]
     convo = None

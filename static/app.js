@@ -572,7 +572,7 @@
     document.addEventListener("click", function (e) {
       var card = e.target.closest && e.target.closest(".post[data-href]");
       if (!card || e.defaultPrevented || e.button !== 0) return;
-      if (e.target.closest("a, button, input, textarea, select, label, summary, video, audio, img, .media, .why")) return;
+      if (e.target.closest("a, button, input, textarea, select, label, summary, video, audio, img, .media, .why, .poll")) return;
       var sel = window.getSelection && window.getSelection();
       if (sel && String(sel).length) return;
       if (e.metaKey || e.ctrlKey) window.open(card.dataset.href, "_blank");

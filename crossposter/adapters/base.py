@@ -136,6 +136,10 @@ class NetworkAdapter(ABC):
     @abstractmethod
     async def repost(self, post: Post, on: bool) -> None: ...
 
+    async def vote(self, post: Post, choices: list[int]):
+        """Vote in the post's poll; returns the updated Poll. Optional."""
+        raise NetworkError(f"Voting in polls isn't possible on {self.label} from Broadsheet.")
+
     async def max_chars(self) -> int:
         return self.char_limit
 

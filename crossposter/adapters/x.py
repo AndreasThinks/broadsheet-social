@@ -21,7 +21,7 @@ from urllib.parse import urlencode
 
 from ..config import settings
 from ..crypto import decrypt_json, encrypt_json, pkce_pair
-from ..models import Account, FeedInfo, Media, Notification, Page, Post
+from ..models import Account, FeedInfo, Media, Notification, Page, Poll, PollOption, Post
 from ..richtext import URL_RE, x_segments, split_for_thread
 from .base import AccountRecord, NetworkAdapter, NetworkError, PostResult, Upload, http, parse_time, save_account
 
@@ -29,7 +29,8 @@ API = "https://api.x.com"
 SCOPES = "tweet.read tweet.write users.read like.write media.write offline.access"
 PRICES = {"post_reads": 0.005, "user_reads": 0.010, "posts": 0.015, "link_posts": 0.200}
 TWEET_FIELDS = "created_at,public_metrics,entities,attachments,in_reply_to_user_id,lang,possibly_sensitive,conversation_id,referenced_tweets"
-EXPANSIONS = "author_id,attachments.media_keys"
+EXPANSIONS = "author_id,attachments.media_keys,attachments.poll_ids"
+POLL_FIELDS = "duration_minutes,end_datetime,voting_status,options"
 USER_FIELDS = "profile_image_url,username,name"
 MAX_THREAD_PARENTS = 3
 MEDIA_FIELDS = "url,preview_image_url,alt_text,width,height,type,variants"
@@ -185,10 +186,20 @@ def to_account(u: dict) -> Account:
                    avatar=u.get("profile_image_url", ""), url=f"https://x.com/{u.get('username', '')}")
 
 
+def _poll(p: dict) -> Poll:
+    """X's API can read polls but not vote in them, so these are shown as results only."""
+    opts = sorted(p.get("options") or [], key=lambda o: o.get("position", 0))
+    options = [PollOption(title=o.get("label") or "", votes=o.get("votes")) for o in opts]
+    return Poll(id=str(p["id"]), options=options, votes=sum(o.votes or 0 for o in options),
+                expires_at=parse_time(p["end_datetime"]) if p.get("end_datetime") else None,
+                expired=p.get("voting_status") == "closed")
+
+
 def _parse(data: dict, account_id: str) -> list[Post]:
     inc = data.get("includes") or {}
     users = {u["id"]: u for u in inc.get("users") or []}
     media = {m["media_key"]: m for m in inc.get("media") or []}
+    polls = {p["id"]: p for p in inc.get("polls") or [] if p.get("id")}
     out = []
     for t in data.get("data") or []:
         author = to_account(users.get(t.get("author_id"), {"id": t.get("author_id", ""), "username": "unknown"}))
@@ -206,11 +217,12 @@ def _parse(data: dict, account_id: str) -> list[Post]:
                 ms.append(Media("gif" if m["type"] == "animated_gif" else "video",
                                 url=variants[-1]["url"] if variants else "", thumb=m.get("preview_image_url", ""),
                                 alt=m.get("alt_text") or ""))
+        poll = next((_poll(polls[i]) for i in (t.get("attachments") or {}).get("poll_ids") or [] if i in polls), None)
         pm = t.get("public_metrics") or {}
         parent_id = next((r.get("id", "") for r in t.get("referenced_tweets") or [] if r.get("type") == "replied_to"), "")
         out.append(Post(network="x", id=t["id"], account_id=account_id, author=author,
                         created_at=parse_time(t.get("created_at")), text=x_segments(t.get("text", ""), t.get("entities")),
-                        url=f"https://x.com/{author.handle}/status/{t['id']}", media=ms,
+                        url=f"https://x.com/{author.handle}/status/{t['id']}", media=ms, poll=poll,
                         is_reply=bool(t.get("in_reply_to_user_id")), reply_to_id=parent_id, likes=pm.get("like_count", 0),
                         reposts=pm.get("retweet_count", 0), replies=pm.get("reply_count", 0),
                         quotes=pm.get("quote_count", 0), sensitive=bool(t.get("possibly_sensitive")),
@@ -247,7 +259,7 @@ class XAdapter(NetworkAdapter):
             raise NetworkError("Reading from X is switched off (it costs money). Turn it on in Settings.")
         check_budget(self.db, post_reads=limit, user_reads=limit)
         data = await self._req("GET", path, params={"tweet.fields": TWEET_FIELDS, "expansions": EXPANSIONS,
-                                                    "user.fields": USER_FIELDS, "media.fields": MEDIA_FIELDS,
+                                                    "user.fields": USER_FIELDS, "media.fields": MEDIA_FIELDS, "poll.fields": POLL_FIELDS,
                                                     **{k: v for k, v in params.items() if v is not None}})
         inc = data.get("includes") or {}
         record_usage(self.db, post_reads=len(data.get("data") or []) + len(inc.get("tweets") or []),
