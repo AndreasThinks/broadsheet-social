@@ -437,6 +437,42 @@ async def post(key: str):
     return await _toggle(key, "repost")
 
 
+@rt("/act/poll")
+async def get(key: str, results: int = 0):
+    from .ui import poll_block
+    post = cache.get_post(db, key)
+    if not post or not post.poll:
+        return Response("Poll not found", status_code=404)
+    return poll_block(post, show_results=bool(results))
+
+
+@rt("/act/vote")
+async def post(req, key: str):
+    from .ui import poll_block
+    post = cache.get_post(db, key)
+    a = registry.account(db, split_key(key)[0])
+    if not post or not post.poll or not a:
+        return Response("Poll not found", status_code=404)
+    form = await req.form()
+    try:
+        choices = sorted({int(c) for c in form.getlist("choice")})
+    except ValueError:
+        choices = []
+    choices = [c for c in choices if 0 <= c < len(post.poll.options)][: None if post.poll.multiple else 1]
+    if not choices:
+        return poll_block(post, error="Pick an option first.")
+    try:
+        poll = await a.vote(post, choices)
+    except NetworkError as e:
+        return poll_block(post, error=str(e))
+    if poll:
+        post.poll = poll
+    else:  # the server didn't send the poll back; count the vote ourselves
+        post.poll.voted, post.poll.own_votes = True, choices
+    cache.update_post(db, post)
+    return poll_block(post)
+
+
 # ---------- posting ----------
 
 @rt("/compose")

@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass, field, fields
+import time
 from typing import Any
 
 
@@ -56,6 +57,35 @@ class LinkCard:
 
 
 @dataclass
+class PollOption:
+    title: str
+    votes: int | None = None   # None when the server hides counts until the poll ends
+
+
+@dataclass
+class Poll:
+    """A poll attached to a post. Mastodon (and its cousins) and X have them; Bluesky has none."""
+    id: str
+    options: list[PollOption] = field(default_factory=list)
+    votes: int = 0                 # total votes cast (one person can cast several in a multiple-choice poll)
+    voters: int | None = None      # people who voted, when the server says
+    multiple: bool = False
+    expires_at: float | None = None
+    expired: bool = False
+    voted: bool = False
+    own_votes: list[int] = field(default_factory=list)
+    can_vote: bool = False         # whether Broadsheet can cast a vote on this network
+
+    @property
+    def closed(self) -> bool:
+        return self.expired or (self.expires_at is not None and self.expires_at <= time.time())
+
+    @property
+    def people(self) -> int:
+        return self.voters if self.voters is not None else self.votes
+
+
+@dataclass
 class Post:
     network: str
     id: str                 # native id: at:// URI, Mastodon status id, X tweet id
@@ -67,6 +97,7 @@ class Post:
     media: list[Media] = field(default_factory=list)
     card: LinkCard | None = None
     quote: Post | None = None
+    poll: Poll | None = None
     reposted_by: Account | None = None
     reply_to_handle: str = ""
     is_reply: bool = False
@@ -148,6 +179,10 @@ def _post_from_dict(d: dict) -> Post:
     d["card"] = _from(LinkCard, d.get("card"))
     d["quote"] = _post_from_dict(d["quote"]) if d.get("quote") else None
     d["parent"] = _post_from_dict(d["parent"]) if d.get("parent") else None
+    if d.get("poll"):
+        poll = dict(d["poll"])
+        poll["options"] = [_from(PollOption, o) for o in poll.get("options") or []]
+        d["poll"] = Poll(**_known(Poll, poll))
     d["reposted_by"] = _from(Account, d.get("reposted_by"))
     return Post(**_known(Post, d))
 
