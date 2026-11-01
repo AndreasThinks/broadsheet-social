@@ -4,9 +4,8 @@
 
 let py = null;
 let handle = null;
-let syncing = false;
-let syncAgain = false;
 let syncTimer = null;
+let current = Promise.resolve();  // the IndexedDB write in progress, if any
 
 function progress(text, pct) { self.postMessage({ type: "progress", text, pct }); }
 
@@ -14,16 +13,26 @@ function syncfs(populate) {
   return new Promise((resolve, reject) => py.FS.syncfs(populate, (err) => (err ? reject(err) : resolve())));
 }
 
-// Write /data back to IndexedDB shortly after the app touches it, one write at a time.
+// Write /data back to IndexedDB, one write at a time. Resolves once everything written so far is saved.
+function persistNow() {
+  clearTimeout(syncTimer);
+  current = current.then(() => syncfs(false)).catch((e) => console.warn("saving to IndexedDB failed", e));
+  return current;
+}
+
+// Write /data back shortly after the app touches it, so a burst of requests is saved once.
 function persistSoon() {
   clearTimeout(syncTimer);
-  syncTimer = setTimeout(async () => {
-    if (syncing) { syncAgain = true; return; }
-    syncing = true;
-    try { await syncfs(false); } catch (e) { console.warn("saving to IndexedDB failed", e); }
-    syncing = false;
-    if (syncAgain) { syncAgain = false; persistSoon(); }
-  }, 400);
+  syncTimer = setTimeout(persistNow, 400);
+}
+
+// Whether this answer sends the browser away from Broadsheet (to a sign-in page). The tab is unloaded straight after,
+// which ends this worker, so anything not yet in IndexedDB (such as the sign-in's state) would be lost.
+function leavesApp(url, status, headers) {
+  const get = (name) => (headers.find(([k]) => k.toLowerCase() === name) || [])[1];
+  const target = status >= 300 && status < 400 ? get("location") : get("hx-redirect");
+  if (!target) return false;
+  try { return new URL(target, url).origin !== new URL(url).origin; } catch (e) { return false; }
 }
 
 async function start(build, base) {
@@ -69,6 +78,7 @@ async function answer(m) {
     const out = await handle(m.method, m.url, m.headers, m.body ? new Uint8Array(m.body) : undefined);
     const body = out.body.slice().buffer;
     res = { status: out.status, headers: out.headers, body };
+    if (leavesApp(m.url, res.status, res.headers)) await persistNow();
   } catch (e) {
     console.error(e);
     const text = `Something went wrong inside Broadsheet.\n\n${e.message || e}`;
