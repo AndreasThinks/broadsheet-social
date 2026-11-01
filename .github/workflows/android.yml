@@ -1,0 +1,21 @@
+name: Android
+on:
+  pull_request:
+  push:
+    branches: [main]
+jobs:
+  android:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: android-actions/setup-android@v3
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: astral-sh/setup-uv@v5
+      - run: uv pip install --system -r android/app/requirements-android.txt
+      - run: chmod +x android/gradlew && cd android && ./gradlew testDebugUnitTest assembleDebug
