@@ -24,6 +24,7 @@ ICONS = {
     "reply": '<path d="M21 12a8 8 0 0 1-11.6 7.1L4 20l1.1-4.6A8 8 0 1 1 21 12z"/>',
     "repost": '<path d="M17 2l4 4-4 4M3 11V9a3 3 0 0 1 3-3h15M7 22l-4-4 4-4M21 13v2a3 3 0 0 1-3 3H3"/>',
     "like": '<path d="M20.8 4.6a5.5 5.5 0 0 0-7.8 0L12 5.7l-1-1.1a5.5 5.5 0 0 0-7.8 7.8l1 1.1L12 21l7.8-7.5 1-1.1a5.5 5.5 0 0 0 0-7.8z"/>',
+    "crosspost": '<circle cx="6" cy="12" r="2.5"/><circle cx="18" cy="5.5" r="2.5"/><circle cx="18" cy="18.5" r="2.5"/><path d="M8.3 10.9l7.4-4.2M8.3 13.1l7.4 4.2"/>',
     "external": '<path d="M14 4h6v6M20 4l-9 9M18 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1h5"/>',
     "grip": '<circle cx="9" cy="6" r="1"/><circle cx="15" cy="6" r="1"/><circle cx="9" cy="12" r="1"/><circle cx="15" cy="12" r="1"/><circle cx="9" cy="18" r="1"/><circle cx="15" cy="18" r="1"/>',
     "why": '<circle cx="12" cy="12" r="9"/><path d="M9.5 9a2.5 2.5 0 1 1 3.5 2.3c-.6.3-1 .9-1 1.6V14M12 17.5v.01"/>',
@@ -235,6 +236,8 @@ def action_bar(post: Post):
                hx_post=f"/act/repost?{k}", hx_target="closest footer", hx_swap="outerHTML", title="Repost"),
         Button(icon("like"), Span(post.likes or ""), cls="act" + (" on-like" if post.liked else ""),
                hx_post=f"/act/like?{k}", hx_target="closest footer", hx_swap="outerHTML", title="Like"),
+        A(icon("crosspost"), href=f"/compose?crosspost={quote(post.key)}", cls="act",
+          title="Cross-post to your other networks", aria_label="Cross-post to your other networks"),
         A(icon("external"), href=safe(post.url), target="_blank", rel="noopener", cls="act",
           title=f"Open on {NETWORK_LABELS.get(post.network, post.network)}"),
         cls="actions")

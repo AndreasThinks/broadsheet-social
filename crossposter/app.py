@@ -13,13 +13,14 @@ from dataclasses import dataclass
 from pathlib import Path
 from urllib.parse import quote, urlencode
 
-from fasthtml.common import (A, Beforeware, Blockquote, Button, Code, Details, Div, Fieldset, Form, Legend, H1, H2, H3, Hidden, Input, Label, Li,
+from fasthtml.common import (A, Beforeware, Blockquote, Button, Code, Details, Div, Fieldset, Form, Legend, H1, H2, H3, Hidden, Img, Input, Label, Li,
                              Link, Meta, Ol, Option, P, Pre, Script, Section, Select, Small, Span, Strong, Summary, Textarea,
                              Ul, fast_app)
 from starlette.responses import FileResponse, JSONResponse, RedirectResponse, Response
 
 from . import adapters as registry
 from . import cache, community, feedcheck, feeds, people, push
+from . import crosspost as xpost
 from .adapters import NetworkError, Upload
 from .adapters import bluesky as bsky
 from .adapters import bluesky_oauth, mastodon, x as xapi
@@ -476,7 +477,7 @@ async def post(req, key: str):
 # ---------- posting ----------
 
 @rt("/compose")
-async def get(reply: str = ""):
+async def get(reply: str = "", crosspost: str = ""):
     accts = [a for a in accounts()]
     if not accts:
         return shell("Post", error_box("Connect an account first."), active="/compose")
@@ -487,11 +488,27 @@ async def get(reply: str = ""):
         mine = next((a for a in accts if a.account_id == reply_acct), None)
         if reply_post and mine and mine.network == "mastodon":
             prefill = people.reply_mentions(reply_post, {a.rec.handle.lower() for a in accts})
-    boxes = []
+    source, body, attr, cw = None, "", "", ""
+    if crosspost and not reply:
+        source = cache.get_post(db, crosspost)
+        if not source:
+            return shell("Cross-post", error_box("That post isn't loaded any more. Open it from your timeline again."),
+                         active="/compose")
+        body, attr = xpost.body_text(source), xpost.attribution(source, xpost.is_mine(source, accts))
+        prefill, cw = xpost.compose(body, attr), source.content_warning
+    already = xpost.default_networks_off(source) if source else set()
+    boxes, fitted = [], {}
     for a in accts:
         limit = await a.max_chars()
-        checked = (a.account_id == reply_acct) if reply else (a.network != "x" or xapi.post_by_default(db))
+        if reply:
+            checked = a.account_id == reply_acct
+        elif source:
+            checked = a.network not in already and (a.network != "x" or xapi.post_by_default(db))
+        else:
+            checked = a.network != "x" or xapi.post_by_default(db)
         disabled = bool(reply) and a.account_id != reply_acct
+        if source:
+            fitted[a.account_id] = xpost.fit(body, attr, a.network, limit)
         boxes.append(Label(Input(type="checkbox", name="accounts", value=a.account_id, checked=checked, disabled=disabled,
                                  data_network=a.network, data_limit=str(limit), cls="acct-box"),
                            avatar(a.me(), "xs"), Span(a.rec.handle), badge(a.network),
@@ -500,38 +517,72 @@ async def get(reply: str = ""):
                            cls="acct-option"))
     handoff = _handoff_available(accts) and not reply
     if handoff:
-        boxes.append(Label(Input(type="checkbox", name="x_handoff", value=xapi.HANDOFF_ID, checked=True,
-                                 data_network="x", data_limit="280", cls="acct-box"),
+        boxes.append(Label(Input(type="checkbox", name="x_handoff", value=xapi.HANDOFF_ID,
+                                 checked="x" not in already, data_network="x", data_limit="280", cls="acct-box"),
                            Span("Finish on X"), badge("x"), Span("", cls="counter", data_for=xapi.HANDOFF_ID),
                            cls="acct-option"))
+        if source:
+            fitted[xapi.HANDOFF_ID] = xpost.fit(body, attr, "x", 280)
     targets = accts + ([xapi.Handoff()] if handoff else [])
     overrides = Details(Summary("Customise the text per network"),
+                        P(Small("Shortened to fit where the post is too long. The link to the original is kept."),
+                          cls="muted") if any(fitted.values()) else None,
                         *[Label(Span(a.rec.handle, " ", badge(a.network)),
-                                Textarea(name=f"text_{a.account_id}", rows=3, placeholder="Leave empty to use the main text",
+                                Textarea(fitted.get(a.account_id) or "", name=f"text_{a.account_id}", rows=3,
+                                         placeholder="Leave empty to use the main text",
                                          data_override=a.account_id, data_network=a.network, cls="mentionable"))
                           for a in targets],
-                        cls="overrides")
+                        open=any(fitted.values()), cls="overrides")
     preview = Div(id="mention-preview", hx_post="/compose/preview", hx_trigger="input delay:700ms from:#compose-form, "
                   "change from:#compose-form, load", hx_include="#compose-form textarea, #compose-form .acct-box, "
                   "#compose-form [name=reply]", aria_live="polite")
     form = Form(
         Hidden(name="reply", value=reply),
+        Hidden(name="crosspost", value=crosspost if source else ""),
         Textarea(prefill, name="text", id="compose-text", rows=6, placeholder="Write something. Type @ to mention someone.",
                  autofocus=True, required=True, cls="mentionable", autocapitalize="sentences"),
         preview,
         Div(*boxes, cls="acct-list"),
-        Div(Label("Images (up to 4)", Input(type="file", name="images", accept="image/*", multiple=True, id="images")),
+        source_media(source) if source and source.media else None,
+        Div(Label("Add images (up to 4)" if source else "Images (up to 4)",
+                  Input(type="file", name="images", accept="image/*", multiple=True, id="images")),
             Div(id="alt-fields"), cls="images"),
-        Div(Label("Content warning", Input(name="cw", placeholder="Optional"), cls="grow"),
+        Div(Label("Content warning", Input(name="cw", value=cw, placeholder="Optional"), cls="grow"),
             Label(Input(type="checkbox", name="thread", value="on", checked=True),
                   "Split long text into a thread"), cls="row"),
         overrides,
-        Div(Span(cls="htmx-indicator spinner"), Button("Publish", cls="primary", id="post-btn"), cls="row end"),
+        Div(Span(cls="htmx-indicator spinner"), Button("Cross-post" if source else "Publish", cls="primary", id="post-btn"),
+            cls="row end"),
         hx_post="/compose", hx_encoding="multipart/form-data", hx_target="#compose-result", hx_swap="innerHTML",
         hx_indicator=".htmx-indicator", hx_disinherit="*", cls="compose stack", id="compose-form")
-    return shell("Write", H2("Reply" if reply else "Write", cls="page-title"),
-                 post_card(reply_post) if reply_post else None, form, Div(id="compose-result"),
+    title = "Reply" if reply else "Cross-post" if source else "Write"
+    intro = P("Posts a copy on your other networks, with its pictures and a link back to the original. "
+              "Edit it as you like before sending.", cls="muted") if source else None
+    return shell(title, H2(title, cls="page-title"), intro,
+                 post_card(reply_post or source) if (reply_post or source) else None, form, Div(id="compose-result"),
                  active="/compose")
+
+
+def source_media(post):
+    """The pictures and videos a cross-post copies, each with its alt text to check or fill in."""
+    rows = []
+    for i, m in enumerate(post.media[:4]):
+        what = {"image": "Picture", "gif": "GIF", "video": "Video", "audio": "Audio"}.get(m.kind, "File")
+        where = {"gif": "Goes to Bluesky and Mastodon. X gets the link instead.",
+                 "video": "Goes to Bluesky and Mastodon. X gets the link instead.",
+                 "audio": "Only Mastodon takes audio. Elsewhere the link stands in for it."}.get(m.kind)
+        thumb = m.thumb or (m.url if m.kind == "image" else "")
+        rows.append(Div(Label(Input(type="checkbox", name="media", value=str(i), checked=True),
+                              Img(src=safe(thumb), alt="", loading="lazy", cls="xp-thumb") if thumb else
+                              Span(what, cls="xp-thumb xp-thumb-text"),
+                              Span(f"Copy {what.lower()} {i + 1}"), cls="xp-pick"),
+                        Label(f"Alt text for {what.lower()} {i + 1}",
+                              Input(name=f"malt_{i}", value=m.alt, placeholder="Describe it for people who can't see it")),
+                        Small(where, cls="muted") if where else None, cls="xp-media"))
+    more = len(post.media) - 4
+    return Fieldset(Legend("From the original"), *rows,
+                    Small(f"{more} more can't be copied, a post holds four.", cls="muted") if more > 0 else None,
+                    cls="xp-media-list")
 
 
 def _handoff_available(accts) -> bool:
@@ -620,9 +671,21 @@ async def post(req):
     targets = _chosen_targets(form, accounts())
     if not targets:
         return error_box("Pick at least one account.")
-    uploads = []
+    uploads, media_notes = [], []
+    source_key = "" if reply_key else (form.get("crosspost") or "")
+    if source_key:
+        source = cache.get_post(db, source_key)
+        if not source:
+            return error_box("That post isn't loaded any more. Open it from your timeline again.")
+        chosen = []
+        for v in form.getlist("media"):
+            try:
+                chosen.append((int(v), (form.get(f"malt_{int(v)}") or "").strip()))
+            except ValueError:
+                continue
+        uploads, media_notes = await xpost.fetch_media(source, sorted(chosen))
     files = [f for f in form.getlist("images") if getattr(f, "filename", "")]
-    for i, f in enumerate(files[:4]):
+    for i, f in enumerate(files[: max(0, 4 - len(uploads))]):
         uploads.append(Upload(data=await f.read(), mime=f.content_type or "image/jpeg",
                               alt=(form.get(f"alt_{i}") or "").strip(), filename=f.filename))
     reply_post = None
@@ -649,8 +712,10 @@ async def post(req):
         handoffs.append((f"CW: {cw}\n\n{t}" if cw else t, ""))
         targets = [a for a in targets if a.account_id != xapi.HANDOFF_ID]
 
+    per_target = {a.account_id: xpost.uploads_for(a.network, uploads) for a in targets}
+
     async def one(a):
-        return await a.post(texts[a.account_id], uploads, reply_post, cw, thread)
+        return await a.post(texts[a.account_id], per_target[a.account_id][0], reply_post, cw, thread)
 
     results = await asyncio.gather(*[one(a) for a in targets], return_exceptions=True)
     rows, record = [], []
@@ -665,18 +730,23 @@ async def post(req):
             record.append({"account": a.account_id, "error": str(res)})
         else:
             first = res[0]
+            left_out = per_target[a.account_id][1]
             rows.append(Li(badge(a.network), " ", a.rec.handle, ": posted",
-                           f" ({len(res)} posts in a thread)" if len(res) > 1 else "", " · ",
-                           A("view", href=first.url, target="_blank", rel="noopener"), cls="ok"))
+                           f" ({len(res)} posts in a thread)" if len(res) > 1 else "",
+                           f" ({left_out} attachment{'s' if left_out > 1 else ''} left out, "
+                           f"{a.label} can't take {'them' if left_out > 1 else 'it'} from Broadsheet)" if left_out else "",
+                           " · ", A("view", href=first.url, target="_blank", rel="noopener"), cls="ok"))
             record.append({"account": a.account_id, "ids": [r.id for r in res], "urls": [r.url for r in res]})
     db.x("insert into cross_posts(created_at, text, results) values(?, ?, ?)", (time.time(), text, json.dumps(record)))
     feeds._results.clear()
     ok = all(not isinstance(r, Exception) for r in results)
-    if reply_key and ok:
-        community.record_action(db, reply_key)
+    if (reply_key or source_key) and ok:
+        community.record_action(db, reply_key or source_key)
     headline = ("Posted." if rows else "Ready for X.") if ok else "Some posts failed."
-    return Div(Div(Strong(headline), Ul(*rows) if rows else None, cls="result " + ("ok" if ok else "warn")),
-               *[handoff_box(t, len(uploads), why) for t, why in handoffs],
+    pictures = sum(1 for u in uploads if u.mime.startswith("image/"))
+    return Div(Div(Strong(headline), Ul(*rows) if rows else None,
+                   *[P(Small(n), cls="muted") for n in media_notes], cls="result " + ("ok" if ok else "warn")),
+               *[handoff_box(t, pictures, why) for t, why in handoffs],
                Script("document.getElementById('compose-form').reset();document.getElementById('alt-fields').innerHTML='';"
                       "document.getElementById('mention-preview').innerHTML='';") if ok else None)
 
