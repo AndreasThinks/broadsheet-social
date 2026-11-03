@@ -260,44 +260,100 @@ def app_picture():
                cls="app-picture", aria_hidden="true")
 
 
+# The hero picture: one post with its "Why this post" box open, beside the rule that scored it. The part names and the code
+# are from feeds/across_networks.py, so what the picture shows is what that feed really does.
+WHY_TERMS = (("on other networks", "+2.41"), ("people sharing the link", "+1.08"), ("tags used elsewhere", "+0.31"))
+WHY_RULE = """# Across networks · by AndreasThinks
+def score(post, ctx):
+    nets = len(ctx.networks_discussing(post))
+    return {
+        "on other networks": 4 * (nets - 1) * decay,
+        "people sharing the link": 1.5 * ctx.log1p(...),
+        "tags used elsewhere": 0.5 * min(shared_tags, 3),
+    }"""
+
+
+def why_picture():
+    name, nets, when, replies, likes, look, text = PICTURE_POSTS[0]
+    return Div(
+        Div(Div(Span("Following"), Span("Across networks", cls="on"), Span("Links worth reading"), Span("Quiet posters"),
+                cls="pic-tabs"),
+            Div(Span(face(*look), Span(*[Span(NotStr(NET_ICONS[k]), cls=f"pic-badge {k}") for k in nets], cls="pic-badges"),
+                     cls="pic-av"),
+                Div(Div(Strong(name), Span(f" · {when}"), cls="pic-who"), P(text),
+                    P(f"Also on {NETS[nets[1]]} · shown once", cls="pic-also"),
+                    Div(Strong("Why this post"), *[Div(Span(k), Span(v)) for k, v in WHY_TERMS],
+                        Div(Span("total"), Span("3.80"), cls="total"), cls="pic-why")),
+                cls="pic-post"),
+            cls="pic-card"),
+        Pre(Code(WHY_RULE), cls="pic-rule"),
+        cls="why-picture", aria_hidden="true")
+
+
+def write_picture():
+    """The composer: one draft, with the mention written the right way for each network."""
+    return Div(
+        Div(Strong("New post"), cls="pic-bar"),
+        Div(P("Great thread from ", Span("Priya Raman", cls="pic-mention"), " on how the solar forecasts got it wrong."),
+            Div(*[x for k, h in (("bluesky", "@priya.bsky.social"), ("mastodon", "@priya@mastodon.energy"),
+                                 ("x", "@priyaraman")) for x in (Span(NETS[k], cls=f"net-{k}"), Span(h))],
+                cls="pic-preview"),
+            Div(*[Span(NETS[k], cls=f"pic-chip net-{k}") for k in NETS], Span("Post to 3", cls="pic-send"), cls="pic-chips"),
+            cls="pic-compose"),
+        cls="write-picture", aria_hidden="true")
+
+
+FEED_STEPS = (("Pick one", "Browse feeds other readers wrote, and try any of them in your browser first."),
+              ("See why", "Every post can show the score behind it, part by part."),
+              ("Change it", "Start a new feed from any one and adjust the rule. It's a few lines of Python."),
+              ("Share it back", "Send it to the directory from the app. A person reads it before it's listed."))
+SHARE_STEPS = (("Send it from the app", "Name it, describe it, and credit yourself or stay anonymous."),
+               ("Automatic checks", "It can't reach the network or your files, only the feed tools."),
+               ("A person reads it", "A maintainer approves it or asks for changes."),
+               ("Listed for everyone", "Follow how it's doing from Your submissions in the app."))
+
+
 @rt("/")
 def get(session):
     rel = releases.current()
     top = sorted(store.feeds(), key=sort_key("downloads"), reverse=True)[:3]
     direct = [A(label, href=f"/downloads/{fname}") for _, label, fname, *_ in PLATFORMS]
-    yes, no = Span("Yes", cls="yes"), Span("No", cls="muted")
-    return layout("Read and post across your networks", Div(
-        Div(Div(P("For Bluesky and Mastodon · X in the apps", cls="kicker"),
-                H1("All your timelines, read like one paper."),
-                P("Broadsheet puts Bluesky and Mastodon in one calm reading view, posts to both at once, and ranks your "
-                  "timeline with feeds you can read and change.", cls="dek"),
+    return layout("Timelines ranked by rules you can read", Div(
+        Div(Div(P("Bluesky · Mastodon · X", cls="kicker"),
+                H1("A timeline ranked by rules you can read."),
+                P("Broadsheet brings your networks into one timeline, then lets you choose how it's ordered. Pick a feed the "
+                  "community wrote, see exactly why each post is there, and change anything you don't like.", cls="dek"),
                 Div(A("Open in your browser", href="/web", cls="button primary large", id="door-web"),
                     A("Download the app", href="/download", cls="button large", id="door-download"), cls="row doors"),
-                P(Span("No sign-up"), Span("Free and open source"), Span("Your accounts stay on your device"), cls="reassure"),
+                P(Span("Free, no account"), Span("Nothing stored on our server"), Span("Open source"), cls="reassure"),
                 P("Download directly: ", *[x for a in direct for x in (a, " · ")][:-1], cls="muted small") if rel else
                 P("The apps are coming soon.", cls="muted small"), cls="hero-text"),
-            app_picture(), cls="hero"),
-        Div(Section(H3("One timeline, every network"),
-                    P("Posts from Bluesky and Mastodon together. A post cross-posted to both shows once.")),
-            Section(H3("Feeds you can read"),
-                    P("Each feed is a short ranking rule. Use the community's, or write your own.")),
-            Section(H3("Nothing on our server"),
-                    P("The app runs on your device or in your browser. This site never sees your accounts. ",
-                      A("What we keep", href="/privacy"))), cls="three"),
-        Section(H2("Browser or app?"),
-                Div(Table(Thead(Tr(Th(""), Th("In your browser"), Th("Windows and Mac"), Th("Android"))),
-                          Tbody(Tr(Th("Getting started"), Td("Open the page"), Td("Download and unzip"), Td("Install the APK")),
-                                Tr(Th("Bluesky and Mastodon"), Td(yes), Td(yes), Td(yes)),
-                                Tr(Th("X"), Td(no), Td(yes), Td(yes)),
-                                Tr(Th("Alerts while closed"), Td("Mastodon only"), Td(no), Td("About every 15 minutes")),
-                                Tr(Th("Updates"), Td("Automatic"), Td("Automatic"), Td("Install over it, or use Obtainium")),
-                                Tr(Th("Where your data lives"), Td("This browser"), Td("Your user folder"), Td("The app"))),
-                          cls="compare"), cls="scroll"),
-                P("Clearing your browser's data for this site signs the browser version out, so keep a backup from its "
-                  "Settings. The first visit downloads about 20 MB.", cls="muted small"), cls="block"),
+            why_picture(), cls="hero"),
+        Section(H2("Feeds are made by the people who use them"),
+                Ol(*[Li(H3(t), P(d)) for t, d in FEED_STEPS], cls="feed-steps"), cls="block"),
         Section(H2("From the community"),
                 Div(*[feed_card(f, cta=False) for f in top], cls="feed-cards three-up") if top else None,
-                P(A("All community feeds →", href="/feeds")), cls="block") if top else None,
+                Div(Div(H3("Wrote a feed you like? Share it."),
+                        A("How sharing works", href="/feeds/share", cls="button"), cls="share-head"),
+                    Ol(*[Li(Strong(t), Span(d)) for t, d in SHARE_STEPS], cls="flow"), cls="share-panel"),
+                P(A("All community feeds →", href="/feeds")), cls="block"),
+        Section(H2("Read everything, write once"),
+                Div(Div(app_picture(),
+                        H3("One timeline, every network"),
+                        P("Bluesky, Mastodon and X together. A post cross-posted to more than one shows once."), cls="pair"),
+                    Div(write_picture(),
+                        H3("Post everywhere at once"),
+                        P("One draft for all your networks, with mentions rewritten for each. Or copy any post across with "
+                          "Cross-post, link back included."), cls="pair"), cls="pairs"), cls="block"),
+        Section(H2("Yours alone"),
+                Div(Section(H3("Nothing on our server"),
+                            P("The app runs on your device or in your browser. This site never sees your accounts. ",
+                              A("What we keep", href="/privacy"))),
+                    Section(H3("Free, with no account"),
+                            P("Sign in with the networks you already use. No ads, nothing to pay for.")),
+                    Section(H3("Browser or app"),
+                            P("The browser version needs no install. The apps add X and alerts. ",
+                              A("Compare them", href="/download#compare"))), cls="three"), cls="block"),
         cls="home-body"), PICK_OS, Script(src="/static/home.js", defer=True), active="/", session=session, main_cls="home")
 
 
@@ -336,7 +392,24 @@ def get(session):
                         A("Open in your browser", href="/web", cls="button")),
                 Section(H2("Questions"), *[Details(Summary(q), P(*(a if isinstance(a, tuple) else (a,)))) for q, a in faq],
                         cls="faq"), cls="side"), cls="download-grid"),
+        compare_table(),
         cls="content wide"), PICK_OS, active="/download", session=session)
+
+
+def compare_table():
+    yes, no = Span("Yes", cls="yes"), Span("No", cls="muted")
+    return Section(H2("Browser or app?"),
+                   Div(Table(Thead(Tr(Th(""), Th("In your browser"), Th("Windows and Mac"), Th("Android"))),
+                             Tbody(Tr(Th("Getting started"), Td("Open the page"), Td("Download and unzip"), Td("Install the APK")),
+                                   Tr(Th("Bluesky and Mastodon"), Td(yes), Td(yes), Td(yes)),
+                                   Tr(Th("X"), Td(no), Td(yes), Td(yes)),
+                                   Tr(Th("Alerts while closed"), Td("Mastodon only"), Td(no), Td("About every 15 minutes")),
+                                   Tr(Th("Updates"), Td("Automatic"), Td("Automatic"), Td("Install over it, or use Obtainium")),
+                                   Tr(Th("Where your data lives"), Td("This browser"), Td("Your user folder"), Td("The app"))),
+                             cls="compare"), cls="scroll"),
+                   P("Clearing your browser's data for this site signs the browser version out, so keep a backup from its "
+                     "Settings. The first visit downloads about 20 MB.", cls="muted small"), cls="block compare-block",
+                   id="compare")
 
 
 def _release_file(name: str):
