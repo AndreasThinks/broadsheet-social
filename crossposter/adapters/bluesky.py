@@ -328,9 +328,14 @@ class BlueskyAdapter(NetworkAdapter):
             text = f"CW: {content_warning}\n\n{text}"
         chunks = split_for_thread(text, self.char_limit) if thread else [text]
         embed = None
-        if images:
+        if images and images[0].mime.startswith("video/"):
+            up = images[0]
+            embed = {"$type": "app.bsky.embed.video", "video": await self._blob(up.data, up.mime)}
+            if up.alt:
+                embed["alt"] = up.alt[:1000]
+        elif images:
             ims = []
-            for up in images[: self.max_images]:
+            for up in [u for u in images if u.mime.startswith("image/")][: self.max_images]:
                 data, mime, (w, h) = shrink_image(up.data, up.mime, MAX_BLOB)
                 ims.append({"image": await self._blob(data, mime), "alt": up.alt or "",
                             "aspectRatio": {"width": w, "height": h}})

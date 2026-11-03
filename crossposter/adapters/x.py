@@ -324,7 +324,7 @@ class XAdapter(NetworkAdapter):
         n_link = sum(1 for c in chunks if URL_RE.search(c))
         check_budget(self.db, posts=len(chunks) - n_link, link_posts=n_link)
         media_ids = []
-        for up in images[: self.max_images]:
+        for up in [u for u in images if u.mime.startswith("image/")][: self.max_images]:
             res = await self._req("POST", "/2/media/upload", files={"media": (up.filename, up.data, up.mime)},
                                   data={"media_category": "tweet_image"})
             mid = (res.get("data") or {}).get("id") or res.get("media_id_string")

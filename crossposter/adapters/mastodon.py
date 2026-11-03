@@ -331,10 +331,11 @@ class MastodonAdapter(NetworkAdapter):
         r = await self._req("POST", "/api/v2/media", files={"file": (up.filename, up.data, up.mime)},
                             data={"description": up.alt} if up.alt else {})
         media = r.json()
-        for _ in range(20):  # large files are processed asynchronously
+        waits = 20 if up.mime.startswith("image/") else 120  # large files, video above all, are processed asynchronously
+        for _ in range(waits):
             if media.get("url"):
                 break
-            await asyncio.sleep(0.5)
+            await asyncio.sleep(0.5 if up.mime.startswith("image/") else 1)
             media = (await self._get(f"/api/v1/media/{media['id']}")).json()
         return media["id"]
 
