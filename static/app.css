@@ -483,7 +483,7 @@ label.check input { width: 18px; height: 18px; margin: 2px 0 0; accent-color: va
 .poll-pick { display: flex; align-items: center; gap: 10px; font-weight: 400; border: 1px solid var(--line); border-radius: var(--radius);
   padding: 8px 12px; cursor: pointer; }
 .poll-pick:hover { border-color: var(--text); }
-.poll-pick input { margin: 0; width: auto; padding: 0; accent-color: var(--accent); flex: none; }
+.poll-pick input { margin: 0; width: 18px; height: 18px; padding: 0; accent-color: var(--accent); flex: none; }
 .poll-pick:has(input:checked) { border-color: var(--accent); background: var(--accent-soft); }
 .poll-row { position: relative; border-radius: var(--radius); overflow: hidden; min-height: 2.2em; }
 .poll-bar { position: absolute; inset: 0 auto 0 0; background: var(--line); border-radius: var(--radius); }

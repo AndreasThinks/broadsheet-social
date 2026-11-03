@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import hmac
 import inspect
 import json
@@ -68,6 +69,19 @@ def auth_check(req, session):
     return RedirectResponse("/login", status_code=303)
 
 
+def _asset_version() -> str:
+    """A short hash of the stylesheet and script, so an update never shows a stale cached copy."""
+    h = hashlib.sha256()
+    for name in ("app.css", "app.js"):
+        try:
+            h.update((STATIC / name).read_bytes())
+        except OSError:
+            pass
+    return h.hexdigest()[:10]
+
+
+ASSET_V = _asset_version()
+
 hdrs = (
     Meta(name="theme-color", content="#ffffff", media="(prefers-color-scheme: light)"),
     Meta(name="theme-color", content="#121212", media="(prefers-color-scheme: dark)"),
@@ -79,8 +93,8 @@ hdrs = (
     Link(rel="manifest", href="/manifest.webmanifest"),
     Link(rel="apple-touch-icon", href="/static/icons/apple-touch-icon.png"),
     Link(rel="icon", type="image/png", href="/static/icons/icon-192.png"),
-    Link(rel="stylesheet", href="/static/app.css"),
-    Script(src="/static/app.js", defer=True),
+    Link(rel="stylesheet", href=f"/static/app.css?v={ASSET_V}"),
+    Script(src=f"/static/app.js?v={ASSET_V}", defer=True),
 ) + ((Meta(name="broadsheet-browser", content="1"), Script(src="/web-files/frame.js", defer=True)) if settings.browser else ())
 
 app, rt = fast_app(
