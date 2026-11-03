@@ -317,7 +317,8 @@ def get(session):
             "browser version is always the latest. On Android, install the new APK over the old one."),
            ("Can Android update automatically?",
             ("Yes, with ", A("Obtainium", href="https://obtainium.imranr.dev/"),
-             ". Add this site's front page as the source and it finds new APKs.")),
+             ". Add ", A("github.com/AndreasThinks/broadsheet-social", href=SOURCE_URL), " as the source and it installs each "
+             "new signed release. That build uses a different signing key from the APK here, so uninstall this one first.")),
            ("Will I get notifications?",
             "On Android, the app checks for replies, mentions, quotes and follows about every 15 minutes, even when it's "
             "closed (Android may check less often to save battery). The browser version can notify you about Mastodon "

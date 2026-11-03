@@ -9,7 +9,7 @@ on:
   workflow_dispatch:
     inputs:
       publish_android_release:
-        description: Publish a signed APK for new installs only; existing debug-signed installs cannot update
+        description: Also publish a signed Android release from a manual run (pushes to main always do)
         required: true
         type: boolean
         default: false
@@ -207,8 +207,10 @@ jobs:
           gh release upload desktop-latest out/Broadsheet-windows.zip out/Broadsheet-macos.zip out/Broadsheet-android.apk out/crossposter-app.zip --clobber
           gh release upload desktop-latest out/manifest.json --clobber
 
+  # A signed, versioned GitHub release for every push to main, so Obtainium (pointed at the repository) finds each
+  # new version. Signed with the private release key, so it can't install over the legacy debug-signed website APK.
   android-release:
-    if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' && inputs.publish_android_release
+    if: github.ref == 'refs/heads/main' && (github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.publish_android_release))
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -272,5 +274,5 @@ jobs:
           if gh release view "$tag" >/dev/null 2>&1; then echo "Refusing to overwrite existing release $tag"; exit 1; fi
           gh release create "$tag" release/Broadsheet-${VERSION_NAME}.apk \
             --title "Broadsheet Android ${VERSION_NAME}" \
-            --notes "New installs only. No supported migration from existing Android installs; do not uninstall the legacy app. The legacy website download remains available." \
+            --notes "Signed Android build of $GITHUB_SHA. Installs over earlier android-v releases. It can't install over the older website APK, which uses a different signing key: uninstall that one first (you'll need to sign in again)." \
             --target "$GITHUB_SHA"
