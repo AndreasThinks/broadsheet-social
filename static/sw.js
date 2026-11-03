@@ -1,5 +1,5 @@
 // Service worker: shows push notifications and keeps a small offline page.
-const CACHE = "crossposter-v2";
+const CACHE = "crossposter-v3";
 const SHELL = ["/static/app.css", "/static/fonts/inter-latin.woff2", "/static/fonts/newsreader-latin.woff2", "/static/app.js", "/static/icons/icon-192.png", "/static/offline.html"];
 
 self.addEventListener("install", (event) => {
@@ -20,7 +20,13 @@ self.addEventListener("fetch", (event) => {
   const url = new URL(req.url);
   if (url.origin !== location.origin) return;
   if (url.pathname.startsWith("/static/")) {
-    event.respondWith(caches.match(req).then((hit) => hit || fetch(req)));
+    // Serve from cache straight away but refresh it in the background, so an app update's
+    // new stylesheet and script are picked up instead of the first copy being kept forever.
+    event.respondWith(caches.open(CACHE).then((c) => c.match(req).then((hit) => {
+      const fresh = fetch(req).then((res) => { if (res.ok) c.put(req, res.clone()); return res; });
+      if (hit) { fresh.catch(() => {}); event.waitUntil(fresh.then(() => {}, () => {})); return hit; }
+      return fresh;
+    })));
     return;
   }
   if (req.mode === "navigate") {

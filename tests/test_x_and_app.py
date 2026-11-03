@@ -51,6 +51,15 @@ def test_pwa_and_oauth_documents(client):
     assert client.get("/oauth/bluesky/jwks.json").json()["keys"]
 
 
+def test_stylesheet_and_script_urls_change_with_their_contents(client):
+    # The service worker caches /static/ files, so the page must ask for a new URL after an update
+    # or phones keep showing the stylesheet from their first install.
+    from crossposter.app import ASSET_V
+    page = client.get("/").text
+    assert f"/static/app.css?v={ASSET_V}" in page and f"/static/app.js?v={ASSET_V}" in page
+    assert client.get(f"/static/app.css?v={ASSET_V}").status_code == 200
+
+
 def test_working_directory_files_are_not_served(client):
     assert client.get("/requirements.txt").status_code == 404
     assert client.get("/static/../requirements.txt").status_code == 404
