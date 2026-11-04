@@ -11,7 +11,7 @@ from bs4 import BeautifulSoup
 from ..config import settings
 from ..crypto import pkce_pair
 from ..models import Account, FeedInfo, LinkCard, Media, Notification, Page, Poll, PollOption, Post
-from ..richtext import mastodon_segments, split_for_thread
+from ..richtext import emoji_map, mastodon_segments, split_for_thread
 from .base import AccountRecord, NetworkAdapter, NetworkError, PostResult, Upload, http, parse_time, save_account
 
 SCOPES = "read write push"
@@ -138,7 +138,7 @@ def to_account(a: dict, host: str) -> Account:
                    display_name=a.get("display_name") or "", avatar=a.get("avatar") or "",
                    url=a.get("url") or "", bio=_bio(a),
                    followers=a.get("followers_count"), following=a.get("following_count"),
-                   posts=a.get("statuses_count"))
+                   posts=a.get("statuses_count"), emojis=emoji_map(a.get("emojis")))
 
 
 def _media(m: dict) -> Media:
@@ -171,6 +171,9 @@ def to_post(s: dict, account_id: str, host: str) -> Post:
         for m in mentions:
             if str(m.get("id")) == str(s["in_reply_to_account_id"]):
                 reply_handle = m["acct"]
+    emojis = emoji_map(s.get("emojis"))
+    if isinstance(s.get("poll"), dict):
+        emojis = {**emoji_map(s["poll"].get("emojis")), **emojis}
     card = s.get("card")
     quote = None
     q = s.get("quote")
@@ -178,7 +181,7 @@ def to_post(s: dict, account_id: str, host: str) -> Post:
         quote = to_post(q["quoted_status"], account_id, host)
     return Post(
         network="mastodon", id=str(s["id"]), account_id=account_id, author=to_account(s["account"], host),
-        created_at=parse_time(s.get("created_at")), text=mastodon_segments(s.get("content", ""), mentions),
+        created_at=parse_time(s.get("created_at")), text=mastodon_segments(s.get("content", ""), mentions, emojis),
         url=s.get("url") or s.get("uri") or "", media=[_media(m) for m in s.get("media_attachments") or []],
         card=LinkCard(url=card["url"], title=card.get("title") or "", description=card.get("description") or "",
                       image=card.get("image") or "") if card else None,
@@ -188,7 +191,7 @@ def to_post(s: dict, account_id: str, host: str) -> Post:
         replies=s.get("replies_count") or 0, quotes=s.get("quotes_count") or 0,
         liked=bool(s.get("favourited")), reposted=bool(s.get("reblogged")),
         content_warning=s.get("spoiler_text") or "", sensitive=bool(s.get("sensitive")),
-        lang=s.get("language") or "", extra={"instance": host, "uri": s.get("uri", "")})
+        lang=s.get("language") or "", extra={"instance": host, "uri": s.get("uri", ""), **({"emojis": emojis} if emojis else {})})
 
 
 NOTIF_KINDS = {"favourite": "like", "reblog": "repost", "follow": "follow", "quote": "quote",

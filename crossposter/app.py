@@ -31,7 +31,7 @@ from .crypto import app_secret
 from .db import DB
 from .models import Notification
 from .richtext import length_for
-from .ui import (NETWORK_LABELS, safe, account_chip, avatar, badge, conversation, error_box, icon, load_more,
+from .ui import (NETWORK_LABELS, safe, account_chip, avatar, badge, conversation, emojify, error_box, icon, load_more,
                  notification_row, page, parent_peek, post_card, profile_url, replying_to, thread_url)
 
 log = logging.getLogger("crossposter")
@@ -365,13 +365,13 @@ async def get(network: str, handle: str, acct: str = ""):
         return shell("Profile", error_box(str(e)))
     counts = [f"{n:,} {label}" for n, label in ((prof.followers, "followers"), (prof.following, "following"),
                                                 (prof.posts, "posts")) if n is not None]
-    head = Section(Div(avatar(prof, "lg"), Div(H1(prof.name), Small(prof.at_handle), " ", badge(network)), cls="profile-head"),
+    head = Section(Div(avatar(prof, "lg"), Div(H1(emojify(prof.name, prof.emojis)), Small(prof.at_handle), " ", badge(network)), cls="profile-head"),
                    P(prof.bio, cls="bio") if prof.bio else None, P(" · ".join(counts), cls="muted"),
                    A("Open on " + NETWORK_LABELS.get(network, network), href=safe(prof.url), target="_blank", rel="noopener")
                    if prof.url else None, cls="panel profile")
     src = "/profile-feed?" + urlencode({"handle": handle, "acct": a.account_id})
     people.remember(db, [prof])
-    return shell(prof.name, head, same_person_panel(network, prof, a.account_id), Div(Div(Span(cls="spinner"), "Loading", cls="more"), hx_get=src, hx_trigger="load"))
+    return shell(prof.plain_name, head, same_person_panel(network, prof, a.account_id), Div(Div(Span(cls="spinner"), "Loading", cls="more"), hx_get=src, hx_trigger="load"))
 
 
 def same_person_panel(network: str, prof, account_id: str):
@@ -382,7 +382,7 @@ def same_person_panel(network: str, prof, account_id: str):
 
     def link_form(other_network: str = "", other_handle: str = "", label: str = "Link"):
         fields = [Hidden(name="network", value=network), Hidden(name="handle", value=prof.handle),
-                  Hidden(name="name", value=prof.display_name), Hidden(name="back", value=here)]
+                  Hidden(name="name", value=prof.plain_name if prof.display_name else ""), Hidden(name="back", value=here)]
         if other_handle:
             return Form(*fields, Hidden(name="other_network", value=other_network),
                         Hidden(name="other_handle", value=other_handle),

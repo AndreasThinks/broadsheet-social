@@ -14,6 +14,35 @@ MENTION_RE = re.compile(r"(?<![\w@])@([a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9
 TAG_RE = re.compile(r"(?<![\w#&])#([^\s#.,;:!?()\[\]{}'\"<>]*[^\d\s#.,;:!?()\[\]{}'\"<>][^\s#.,;:!?()\[\]{}'\"<>]*)")
 
 
+EMOJI_RE = re.compile(r":([\w+-]+):")
+
+
+def emoji_segments(text: str, emojis: dict[str, str] | None) -> list[Segment]:
+    """Split plain text into text and custom-emoji segments. Mastodon (and Misskey, Pleroma and friends)
+    send custom emoji as :shortcode: in the text plus a list saying which image each shortcode is."""
+    if not emojis or ":" not in text:
+        return [Segment("text", text)] if text else []
+    out, pos = [], 0
+    for m in EMOJI_RE.finditer(text):
+        url = emojis.get(m.group(1))
+        if not url:
+            continue
+        out.append(Segment("text", text[pos:m.start()]))
+        out.append(Segment("emoji", m.group(0), href=url, target=m.group(1)))
+        pos = m.end()
+    out.append(Segment("text", text[pos:]))
+    return [s for s in out if s.text]
+
+
+def emoji_map(items: list[dict] | None) -> dict[str, str]:
+    """Mastodon's `emojis` list as shortcode -> image URL."""
+    out = {}
+    for e in items or []:
+        if isinstance(e, dict) and e.get("shortcode") and (e.get("url") or e.get("static_url")):
+            out[e["shortcode"]] = e.get("url") or e.get("static_url")
+    return out
+
+
 def merge(segments: list[Segment]) -> list[Segment]:
     """Join neighbouring plain-text runs."""
     out: list[Segment] = []
@@ -120,7 +149,8 @@ def _link_text(a: Tag) -> str:
     return text + ("…" if trimmed else "")
 
 
-def mastodon_segments(html: str, mentions: list[dict] | None = None) -> list[Segment]:
+def mastodon_segments(html: str, mentions: list[dict] | None = None,
+                      emojis: dict[str, str] | None = None) -> list[Segment]:
     """Turn Mastodon's status HTML into segments."""
     if not html:
         return []
@@ -131,10 +161,14 @@ def mastodon_segments(html: str, mentions: list[dict] | None = None) -> list[Seg
     def walk(node, depth=0):
         for child in node.children:
             if isinstance(child, NavigableString):
-                out.append(Segment("text", str(child)))
+                out.extend(emoji_segments(str(child), emojis))
             elif isinstance(child, Tag):
                 name = child.name
-                if name == "br":
+                if name == "img" and emojis and (child.get("alt") or "").strip(":") in emojis:
+                    # Some servers send the emoji as an <img> already.
+                    code = child.get("alt").strip(":")
+                    out.append(Segment("emoji", f":{code}:", href=emojis[code], target=code))
+                elif name == "br":
                     out.append(Segment("text", "\n"))
                 elif name == "a":
                     href = child.get("href", "")

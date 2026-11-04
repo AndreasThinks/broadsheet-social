@@ -189,7 +189,7 @@ def remember(db, accounts: list[Account]) -> None:
     rows = {}
     for a in accounts:
         if a and a.handle and a.network in NETWORKS:
-            rows[(a.network, normalise(a.network, a.handle))] = (a.display_name or "", a.avatar or "")
+            rows[(a.network, normalise(a.network, a.handle))] = (a.plain_name if a.display_name else "", a.avatar or "")
     if rows:
         db.xmany("""insert into seen_accounts(network, handle, display_name, avatar, last_seen) values(?, ?, ?, ?, ?)
                     on conflict(network, handle) do update set display_name=excluded.display_name,

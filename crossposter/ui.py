@@ -12,6 +12,7 @@ from fasthtml.common import (A, Article, Aside, Button, Details, Div, Footer, Fo
                              Section, Small, Span, Strong, Summary, Title, Ul, Video, NotStr)
 
 from .models import Account, Notification, Poll, Post, Segment
+from .richtext import emoji_segments
 
 NETWORK_LABELS = {"bluesky": "Bluesky", "mastodon": "Mastodon", "x": "X"}
 
@@ -76,8 +77,28 @@ def avatar(acct: Account, size: str = "md"):
 
 
 def account_chip(acct: Account, account_id: str = ""):
-    return A(avatar(acct, "sm"), Span(Strong(acct.name), " ", Small(acct.at_handle)), cls="chip",
+    return A(avatar(acct, "sm"), Span(name_of(acct), " ", Small(acct.at_handle)), cls="chip",
              href=profile_url(acct.network, acct.handle, account_id))
+
+
+def _emoji_img(url: str, code: str) -> str:
+    return (f'<img src="{escape(safe(url))}" alt=":{escape(code)}:" title=":{escape(code)}:" class="emoji" '
+            f'loading="lazy" decoding="async">')
+
+
+def emoji_html(text: str, emojis: dict[str, str] | None) -> str:
+    """Escaped text with custom :shortcode: emoji drawn as pictures."""
+    return "".join(_emoji_img(s.href, s.target) if s.kind == "emoji" else escape(s.text)
+                   for s in emoji_segments(text, emojis))
+
+
+def emojify(text: str, emojis: dict[str, str] | None):
+    return NotStr(emoji_html(text, emojis)) if emojis else text
+
+
+def name_of(acct: Account):
+    """An account's name in bold, with any custom emoji in it drawn."""
+    return Strong(emojify(acct.name, acct.emojis))
 
 
 def rich_text(segments: list[Segment], network: str, account_id: str):
@@ -91,6 +112,8 @@ def rich_text(segments: list[Segment], network: str, account_id: str):
         elif s.kind == "mention":
             href = profile_url(network, s.target or s.text.lstrip("@"), account_id)
             parts.append(f'<a href="{escape(href)}" class="mention">{text}</a>')
+        elif s.kind == "emoji":
+            parts.append(_emoji_img(s.href, s.target))
         elif s.kind == "tag":
             if network == "mastodon":
                 href = f"/?feed=mastodon:tag:{quote(s.target)}&acct={quote(account_id)}"
@@ -184,7 +207,7 @@ def poll_block(post: Post, show_results: bool = False, error: str = ""):
     votable = poll.can_vote and not poll.closed and not poll.voted
     if votable and not show_results:
         kind = "checkbox" if poll.multiple else "radio"
-        rows = [Label(Input(type=kind, name="choice", value=str(i)), Span(o.title, cls="poll-title"), cls="poll-pick")
+        rows = [Label(Input(type=kind, name="choice", value=str(i)), Span(emojify(o.title, post.extra.get("emojis")), cls="poll-title"), cls="poll-pick")
                 for i, o in enumerate(poll.options)]
         return Form(*rows,
                     Div(Button("Vote", type="submit", cls="poll-vote"),
@@ -205,7 +228,7 @@ def poll_block(post: Post, show_results: bool = False, error: str = ""):
         cls = "poll-row" + (" poll-lead" if not hidden and top and o.votes == top else "") + (" poll-mine" if mine else "")
         rows.append(Div(Div(cls="poll-bar", style=f"width:{share}%"),
                         Span(Strong("—" if hidden else f"{share}%", cls="poll-pct"),
-                             Span(o.title, cls="poll-title"),
+                             Span(emojify(o.title, post.extra.get("emojis")), cls="poll-title"),
                              Span("✓", cls="poll-check", title="Your vote") if mine else None, cls="poll-label"),
                         cls=cls, title=None if hidden else f"{o.votes:,} vote{'s' if o.votes != 1 else ''}"))
     foot = [Small(" · ".join(status), cls="poll-meta")]
@@ -221,7 +244,7 @@ def quote_card(post: Post):
     q = post.quote
     if not q:
         return None
-    return A(Div(avatar(q.author, "xs"), Strong(q.author.name), Small(" ", q.author.at_handle, " · ", ago(q.created_at)),
+    return A(Div(avatar(q.author, "xs"), name_of(q.author), Small(" ", q.author.at_handle, " · ", ago(q.created_at)),
                  cls="quote-head"),
              rich_text(q.text, q.network, q.account_id), media_grid(q),
              Div(f"Poll · {len(q.poll.options)} options", cls="poll-mini") if q.poll else None,
@@ -253,11 +276,20 @@ def why(terms: dict[str, float], total: float):
                    cls="why")
 
 
+def _peek_text(post: Post):
+    if not post.plain_text.strip():
+        return "(no text)"
+    if not any(s.kind == "emoji" for s in post.text):
+        return post.plain_text.strip()
+    return NotStr("".join(_emoji_img(s.href, s.target) if s.kind == "emoji" else escape(s.text)
+                          for s in post.text).strip())
+
+
 def parent_peek(parent: Post, href: str):
     """The post a reply answers, as a faded two-line preview joined to the reply by a thin line."""
     return A(Div(avatar(parent.author, "xs"), Span(cls="peek-line"), cls="peek-rail"),
-             Div(Div(Strong(parent.author.name), " ", Span(parent.author.at_handle, cls="handle"), cls="peek-who"),
-                 Div(parent.plain_text.strip() or "(no text)", cls="peek-text"), cls="peek-body"),
+             Div(Div(name_of(parent.author), " ", Span(parent.author.at_handle, cls="handle"), cls="peek-who"),
+                 Div(_peek_text(parent), cls="peek-text"), cls="peek-body"),
              href=href, cls="peek")
 
 
@@ -285,7 +317,7 @@ def post_card(post: Post, score: tuple[float, dict] | None = None, focus: bool =
     on = " and ".join(NETWORK_LABELS.get(n, n) for n in dict.fromkeys(nets))
     head = Header(
         A(avatar(a, "sm"), href=profile_url(a.network, a.handle, post.account_id), cls="avatar-link"),
-        Div(Div(A(Strong(a.name), href=profile_url(a.network, a.handle, post.account_id), cls="name"),
+        Div(Div(A(name_of(a), href=profile_url(a.network, a.handle, post.account_id), cls="name"),
                 Span("Started it", cls="op", title="Wrote the first post in this conversation") if op else None,
                 cls="name-row"),
             Div(Span(a.at_handle, cls="handle"), f" · on {on} · ",
@@ -296,9 +328,9 @@ def post_card(post: Post, score: tuple[float, dict] | None = None, focus: bool =
     lines = []
     boosted = post.extra.get("boosted_by") or []
     if post.reposted_by or boosted:
-        who = post.reposted_by.name if post.reposted_by else boosted[0]
+        who = emojify(post.reposted_by.name, post.reposted_by.emojis) if post.reposted_by else boosted[0]
         more = len(set(boosted)) - 1 if boosted else 0
-        lines.append(Div(icon("repost", "icon sm"), f" {who} reposted" + (f" (+{more})" if more > 0 else ""), cls="context"))
+        lines.append(Div(icon("repost", "icon sm"), " ", who, " reposted" + (f" (+{more})" if more > 0 else ""), cls="context"))
     if post.is_reply and not in_thread and not focus:
         lines.append(reply_context(post))
     elif post.reply_to_handle and not in_thread and not focus:
@@ -306,7 +338,7 @@ def post_card(post: Post, score: tuple[float, dict] | None = None, focus: bool =
     body = [rich_text(post.text, post.network, post.account_id), media_grid(post), poll_block(post), link_card(post),
             quote_card(post)]
     if post.content_warning or post.sensitive:
-        body = [Details(Summary(post.content_warning or "Sensitive content", cls="cw"), *body)]
+        body = [Details(Summary(emojify(post.content_warning, post.extra.get("emojis")) if post.content_warning else "Sensitive content", cls="cw"), *body)]
     convo = None
     if not in_thread and not focus and post.is_reply:
         label = "Show conversation" + (f" · {post.replies} repl{'y' if post.replies == 1 else 'ies'}" if post.replies else "")
@@ -396,7 +428,7 @@ def notification_row(n: Notification):
         target = A(n.post.plain_text[:280] or "(no text)", href=thread_url(n.post), cls="notif-text")
     return Article(
         Div(avatar(a, "sm"), cls="notif-avatar"),
-        Div(Div(A(Strong(a.name), href=profile_url(a.network, a.handle, n.account_id)), f" {VERBS.get(n.kind, '')}",
+        Div(Div(A(name_of(a), href=profile_url(a.network, a.handle, n.account_id)), f" {VERBS.get(n.kind, '')}",
                 Span(badge(n.network), Small(" ", ago(n.created_at)), cls="notif-meta")),
             target, cls="notif-body"),
         cls=f"notif notif-{n.kind}")

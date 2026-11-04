@@ -151,6 +151,7 @@ label > input, label > textarea { margin-top: 4px; font-weight: 400; }
 .context { color: var(--muted); font-size: .85rem; margin: 0 0 8px; }
 .text { white-space: pre-wrap; overflow-wrap: anywhere; margin: 10px 0 6px; font-family: var(--serif); font-size: 1.2rem; line-height: 1.5; }
 .text .mention, .text .tag { font-weight: 500; }
+.emoji { display: inline-block; height: 1.25em; width: auto; max-width: 3em; vertical-align: -0.25em; margin: 0 0.05em; object-fit: contain; }
 .cw { cursor: pointer; color: var(--warn); font-weight: 600; margin: 10px 0; }
 .media { display: grid; gap: 3px; margin: 10px 0; overflow: hidden; }
 .media-2, .media-4 { grid-template-columns: 1fr 1fr; } .media-3 { grid-template-columns: 2fr 1fr; }
