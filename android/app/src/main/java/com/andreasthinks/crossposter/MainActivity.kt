@@ -16,6 +16,7 @@ import android.webkit.WebResourceRequest
 import android.webkit.WebView
 import android.webkit.WebViewClient
 import android.widget.FrameLayout
+import android.app.AlertDialog
 import android.widget.TextView
 import androidx.activity.ComponentActivity
 import androidx.activity.OnBackPressedCallback
@@ -42,6 +43,15 @@ class MainActivity : ComponentActivity() {
         fileCallback = null
     }
     private val askNotifications = registerForActivityResult(ActivityResultContracts.RequestPermission()) {}
+    private val createBackup = registerForActivityResult(ActivityResultContracts.CreateDocument("application/json")) { uri ->
+        if (uri != null) runCatching { BackupRestore.exportDatabase(java.io.File(filesDir, "broadsheet.sqlite"), contentResolver, uri) }
+            .onFailure { status.visibility = android.view.View.VISIBLE; status.text = "Backup failed: ${it.message}" }
+    }
+    private val restoreBackup = registerForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+        if (uri != null) runCatching { BackupRestore.stageRestore(java.io.File(filesDir, "broadsheet.sqlite"), contentResolver, uri) }
+            .onSuccess { status.visibility = android.view.View.VISIBLE; status.text = "Restore validated and staged. Restart Broadsheet to apply it." }
+            .onFailure { status.visibility = android.view.View.VISIBLE; status.text = "Restore failed: ${it.message}" }
+    }
 
     @SuppressLint("SetJavaScriptEnabled")
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -52,6 +62,11 @@ class MainActivity : ComponentActivity() {
             setBackgroundColor(Color.parseColor("#f7f7fb"))
             addView(web)
             addView(status)
+            addView(android.widget.LinearLayout(this).apply {
+                orientation = android.widget.LinearLayout.HORIZONTAL
+                addView(android.widget.Button(this@MainActivity).apply { text = "Back up"; setOnClickListener { AlertDialog.Builder(this@MainActivity).setMessage(R.string.backup_warning).setNegativeButton("Cancel", null).setPositiveButton("Continue") { _, _ -> createBackup.launch("broadsheet-backup.json") }.show() } })
+                addView(android.widget.Button(this@MainActivity).apply { text = "Restore"; setOnClickListener { AlertDialog.Builder(this@MainActivity).setMessage(R.string.backup_warning).setNegativeButton("Cancel", null).setPositiveButton("Choose backup") { _, _ -> restoreBackup.launch(arrayOf("application/json", "text/*", "application/octet-stream")) }.show() } })
+            }, FrameLayout.LayoutParams(-2, -2, Gravity.BOTTOM or Gravity.CENTER_HORIZONTAL))
         }
         ViewCompat.setOnApplyWindowInsetsListener(root) { v, insets ->
             val bars = insets.getInsets(WindowInsetsCompat.Type.systemBars() or WindowInsetsCompat.Type.ime())
@@ -60,6 +75,7 @@ class MainActivity : ComponentActivity() {
         }
         setContentView(root)
 
+        web.setDownloadListener { _, _, _, _, _ -> }
         web.settings.apply {
             javaScriptEnabled = true
             domStorageEnabled = true

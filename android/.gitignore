@@ -1,5 +1,4 @@
-.gradle/
-build/
-local.properties
-*.keystore
-!shared-debug.keystore
+/local.properties
+/.gradle/
+/build/
+/app/build/

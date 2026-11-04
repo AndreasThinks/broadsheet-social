@@ -36,9 +36,23 @@ fun startPython(context: Context): Python {
     return Python.getInstance()
 }
 
+/** Promote a validated backup before any Python code can open the live database. */
+private fun promoteStagedRestore(context: Context) {
+    val staged = File(context.filesDir, "broadsheet.sqlite.restore")
+    if (!staged.exists()) return
+    val live = File(context.filesDir, "broadsheet.sqlite")
+    val sidecars = listOf("-wal", "-shm")
+    sidecars.forEach { File(live.path + it).delete() }
+    val replacement = File(context.filesDir, "broadsheet.sqlite.restore-ready")
+    if (!staged.renameTo(replacement)) throw IllegalStateException("Cannot activate staged restore")
+    if (live.exists() && !live.delete()) throw IllegalStateException("Cannot replace current database")
+    if (!replacement.renameTo(live)) throw IllegalStateException("Cannot activate restored database")
+}
+
 /** Copy crossposter/, static/ and feeds/ out of the APK into files/app, once per installed version. */
 private fun unpackAppCode(context: Context) {
     val version = context.packageManager.getPackageInfo(context.packageName, 0).longVersionCode.toString()
+    promoteStagedRestore(context)
     val target = File(context.filesDir, "app")
     val stamp = File(target, ".version")
     if (stamp.exists() && stamp.readText() == version) return
