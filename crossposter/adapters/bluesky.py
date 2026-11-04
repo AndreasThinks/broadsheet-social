@@ -131,7 +131,8 @@ def to_post(pv: dict, account_id: str, reason: dict | None = None, reply: dict |
         liked=bool(viewer.get("like")), reposted=bool(viewer.get("repost")),
         content_warning=", ".join(sensitive), sensitive=bool(sensitive), lang=langs[0] if langs else "",
         extra={"uri": pv["uri"], "cid": pv.get("cid"), "like_uri": viewer.get("like"),
-               "repost_uri": viewer.get("repost"), "root": rep.get("root"), "parent": rep.get("parent")})
+               "repost_uri": viewer.get("repost"), "root": rep.get("root"), "parent": rep.get("parent"),
+               **({"langs": langs} if len(langs) > 1 else {})})
 
 
 NOTIF_KINDS = {"like": "like", "repost": "repost", "follow": "follow", "mention": "mention",

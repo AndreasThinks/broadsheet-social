@@ -170,3 +170,14 @@ def test_peek_loads_parent_and_falls_back(client):
     assert 'class="peek"' in r.text and "/thread?key=demo-mastodon%7Cc1" in r.text
     r = client.get("/peek?key=gone%7Cp1&child=demo-mastodon%7Cc1")
     assert "Replying to" in r.text and 'class="peek"' not in r.text
+
+
+def test_language_setting_saves_and_shows(client):
+    from crossposter.app import db
+    r = client.post("/settings/languages", data={"lang": ["en", "fr"], "other": "pt-BR, ??, ja"}, follow_redirects=False)
+    assert r.status_code == 303
+    assert db.get("languages") == ["en", "fr", "pt", "ja"]
+    page = client.get("/settings").text
+    assert "Showing posts in English, French, Portuguese, Japanese" in page
+    client.post("/settings/languages", data={}, follow_redirects=False)
+    assert db.get("languages") == [] and "Showing every language." in client.get("/settings").text
