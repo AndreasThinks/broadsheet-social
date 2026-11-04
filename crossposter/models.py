@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass, field, fields
+import re
 import time
 from typing import Any
 
@@ -9,9 +10,9 @@ from typing import Any
 @dataclass
 class Segment:
     """A run of rich text: plain text, a link, a mention or a hashtag."""
-    kind: str  # "text" | "link" | "mention" | "tag"
+    kind: str  # "text" | "link" | "mention" | "tag" | "emoji"
     text: str
-    href: str = ""    # external URL for links, profile URL for mentions
+    href: str = ""    # external URL for links, profile URL for mentions, image URL for custom emoji
     target: str = ""  # mention: the account's handle (or DID); tag: the tag name
 
 
@@ -27,10 +28,19 @@ class Account:
     followers: int | None = None
     following: int | None = None
     posts: int | None = None
+    emojis: dict[str, str] = field(default_factory=dict)  # custom emoji in the name: shortcode -> image URL
 
     @property
     def name(self) -> str:
         return self.display_name or self.handle
+
+    @property
+    def plain_name(self) -> str:
+        """The name with custom emoji shortcodes taken out, for places that can only show text."""
+        if not self.emojis or not self.display_name:
+            return self.name
+        name = re.sub(r":([\w+-]+):", lambda m: "" if m.group(1) in self.emojis else m.group(0), self.display_name)
+        return " ".join(name.split()) or self.handle
 
     @property
     def at_handle(self) -> str:
