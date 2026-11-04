@@ -170,3 +170,30 @@ def test_unedited_starter_feeds_are_upgraded(tmp_path):
 
 
 OLD_LINKS_FEED = '"""Posts that share a link, ranked by how much discussion they got. Good for a reading list."""\nfrom crossposter.feeds import Feed, Post, Ctx\n\nfeed = Feed(\n    name="Links worth reading",\n    description="Posts with a link card from your timelines, most discussed first.",\n    sources=["bluesky:following", "mastodon:home"],\n    window_hours=36,\n)\n\n\ndef keep(post: Post, ctx: Ctx) -> bool:\n    return post.card is not None\n\n\ndef score(post: Post, ctx: Ctx) -> dict:\n    return {\n        "discussion": ctx.log1p(post.replies + post.quotes) * 2,\n        "engagement": ctx.normalised_engagement(post),\n        "freshness": 1 / (ctx.age_hours(post) + 3),\n    }\n'
+
+
+def test_language_matching_handles_regions_untagged_and_several_tags():
+    p = mk("bluesky", "at://l1", "bonjour")
+    assert feeds.in_language(p, ["fr"])            # untagged posts stay by default
+    assert not feeds.in_language(p, ["fr"], untagged=False)
+    p.lang = "en-GB"
+    assert feeds.in_language(p, ["en"]) and not feeds.in_language(p, ["fr"])
+    p.lang, p.extra["langs"] = "en", ["en", "pt_BR"]
+    assert feeds.post_languages(p) == {"en", "pt"} and feeds.Ctx.in_language(p, "pt")
+    p.lang, p.extra = "und", {}                    # X's "undetermined"
+    assert feeds.post_languages(p) == set() and feeds.in_language(p, ["de"])
+
+
+def test_feed_languages_filter_the_pool_and_follow_settings():
+    db = DB(":memory:")
+    posts = [mk("mastodon", str(i), f"post number {i} here", ago=i * 0.1) for i in range(4)]
+    for p, lang in zip(posts, ["en", "fr", "de", ""]):
+        p.lang = lang
+    cache.save_posts(db, posts, "mastodon:home")
+    ids = lambda f: sorted(p.id for p in feeds.pool(db, f))
+    assert ids(feeds.Feed(name="All", sources=["mastodon:home"])) == ["0", "1", "2", "3"]
+    db.set("languages", ["fr"])
+    assert ids(feeds.Feed(name="Global", sources=["mastodon:home"])) == ["1", "3"]
+    assert ids(feeds.Feed(name="Own", sources=["mastodon:home"], languages=["de"])) == ["2", "3"]
+    assert ids(feeds.Feed(name="Any", sources=["mastodon:home"], languages=[])) == ["0", "1", "2", "3"]
+    assert list(feeds.seen_languages(db)) and set(feeds.seen_languages(db)) == {"en", "fr", "de"}

@@ -7,6 +7,7 @@ import hmac
 import inspect
 import json
 import logging
+import re
 import shutil
 import tempfile
 import time
@@ -1142,7 +1143,7 @@ async def post(code: str):
         accts = accounts()
         try:
             await cache.refresh(db, accts, lf.feed.sources)
-            posts = cache.collapse(cache.candidates(db, lf.feed.sources, lf.feed.window_hours))[: lf.feed.limit]
+            posts = feeds.pool(db, lf.feed)
             ctx = feeds.Ctx(posts, {a.rec.handle for a in accts}, set(db.get("muted", [])))
             ranked = await asyncio.wait_for(asyncio.to_thread(feeds.rank, lf, posts, ctx), settings.feed_timeout_seconds)
         except Exception as e:
@@ -1563,6 +1564,7 @@ async def get(error: str = "", ok: str = ""):
                      community.choice(db) or "", "not chosen yet")), ". They help community feed authors and never include "
                      "handles or posts.", cls="muted"), A("Privacy settings", href="/settings/privacy", cls="button"),
                          cls="panel", id="privacy"),
+                 _language_settings(),
                  Section(H3("Muted accounts"), P("One handle per line. Hidden from custom feeds.", cls="muted"),
                          Form(Textarea("\n".join(db.get("muted", [])), name="muted", rows=4),
                               Button("Save", cls="small"), method="post", action="/settings/muted", cls="stack"),
@@ -1570,6 +1572,26 @@ async def get(error: str = "", ok: str = ""):
                  _browser_settings() if settings.browser else None,
                  Form(Button("Sign out", cls="small"), method="post", action="/logout") if settings.app_password else None,
                  active="/settings")
+
+
+def _language_settings():
+    chosen = list(db.get("languages", []))
+    seen = feeds.seen_languages(db)
+    codes = list(dict.fromkeys([*chosen, *list(seen)[:12], "en"]))
+    boxes = [Label(Input(type="checkbox", name="lang", value=c, checked=c in chosen), " ", feeds.language_name(c),
+                   Small(f" {seen[c]:,} recent posts" if seen.get(c) else "", cls="muted"), cls="check")
+             for c in codes]
+    status = ("Showing posts in " + ", ".join(feeds.language_name(c) for c in chosen) + ", plus posts with no language set."
+              if chosen else "Showing every language.")
+    return Section(H3("Languages", id="languages"),
+                   P("Custom feeds only show posts in the languages you tick. Nothing ticked shows everything. Posts with "
+                     "no language set always show, and a feed can set its own languages.", cls="muted"),
+                   P(status, cls="muted"),
+                   Form(Div(*boxes, cls="row wrap"),
+                        Label("Other languages", Input(name="other", placeholder="Two-letter codes, e.g. pt, ja",
+                                                       autocapitalize="none", autocorrect="off")),
+                        Button("Save", cls="small"), method="post", action="/settings/languages", cls="stack"),
+                   cls="panel")
 
 
 def _browser_settings():
@@ -1721,6 +1743,15 @@ async def post(muted: str = ""):
     db.set("muted", [m.strip().lstrip("@") for m in muted.splitlines() if m.strip()])
     feeds._results.clear()
     return RedirectResponse("/settings?ok=Saved", status_code=303)
+
+
+@rt("/settings/languages")
+async def post(req):
+    form = await req.form()
+    picked = [*form.getlist("lang"), *re.split(r"[\s,]+", form.get("other", ""))]
+    db.set("languages", list(dict.fromkeys(c for c in map(feeds.lang_code, picked) if c.isalpha() and len(c) <= 3)))
+    feeds._results.clear()
+    return RedirectResponse("/settings?ok=Languages+saved#languages", status_code=303)
 
 
 @rt("/accounts/remove")

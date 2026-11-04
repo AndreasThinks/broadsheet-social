@@ -8,6 +8,9 @@ Starter feeds ship in the repo's feeds/ folder; any your feeds folder doesn't ha
 under "Add more feeds" on the Feeds page. Tab order and which feeds show on Home (set on the Arrange tabs page) are
 saved in the database (feed_prefs), not in the files.
 
+Feed(languages=["en", "fr"]) keeps only posts tagged in those languages (untagged posts stay). Leave it out
+to follow Settings → Languages, or pass languages=[] to show every language whatever that setting says.
+
 Sources a feed can draw from:
     bluesky:following      bluesky:discover        bluesky:feed:<at:// uri>   bluesky:list:<at:// uri>
     mastodon:home          mastodon:local          mastodon:public            mastodon:trending
@@ -19,6 +22,7 @@ import asyncio
 import bisect
 import hashlib
 import importlib.util
+import json
 import logging
 import math
 import sys
@@ -46,6 +50,71 @@ class Feed:
     description: str = ""
     limit: int = 300            # most posts to rank, shared evenly between the networks in sources
     include_replies: bool = True
+    languages: list[str] | None = None  # e.g. ["en", "fr"]; None follows Settings → Languages, [] shows every language
+
+
+# Tags that mean "no particular language": undetermined, no text, media/hashtags/emoji only (X uses the q* ones).
+NO_LANGUAGE = {"", "und", "zxx", "mul", "mis", "qme", "qht", "qam", "qct", "qst", "art"}
+
+
+LANGUAGE_NAMES = {
+    "ar": "Arabic", "ca": "Catalan", "cs": "Czech", "cy": "Welsh", "da": "Danish", "de": "German", "el": "Greek",
+    "en": "English", "eo": "Esperanto", "es": "Spanish", "et": "Estonian", "eu": "Basque", "fa": "Persian",
+    "fi": "Finnish", "fr": "French", "ga": "Irish", "gl": "Galician", "he": "Hebrew", "hi": "Hindi",
+    "hu": "Hungarian", "id": "Indonesian", "is": "Icelandic", "it": "Italian", "ja": "Japanese", "ko": "Korean",
+    "lt": "Lithuanian", "lv": "Latvian", "nb": "Norwegian", "nl": "Dutch", "nn": "Norwegian Nynorsk",
+    "no": "Norwegian", "pl": "Polish", "pt": "Portuguese", "ro": "Romanian", "ru": "Russian", "sk": "Slovak",
+    "sl": "Slovenian", "sr": "Serbian", "sv": "Swedish", "th": "Thai", "tl": "Tagalog", "tr": "Turkish",
+    "uk": "Ukrainian", "vi": "Vietnamese", "zh": "Chinese",
+}
+
+
+def language_name(code: str) -> str:
+    return LANGUAGE_NAMES.get(code, code)
+
+
+def seen_languages(db, hours: float = 48) -> dict[str, int]:
+    """How many recently cached posts are tagged with each language, most common first."""
+    counts: dict[str, int] = defaultdict(int)
+    for row in db.q("select data from posts where created_at > ?", (time.time() - hours * 3600,)):
+        for c in post_languages(Post.from_dict(json.loads(row["data"]))):
+            counts[c] += 1
+    return dict(sorted(counts.items(), key=lambda kv: -kv[1]))
+
+
+def lang_code(tag: str) -> str:
+    """The primary language of a tag, lower case: "en-GB" -> "en", "pt_BR" -> "pt". "" for no particular language."""
+    code = (tag or "").strip().lower().replace("_", "-").split("-")[0]
+    return "" if code in NO_LANGUAGE else code
+
+
+def post_languages(post: Post) -> set[str]:
+    """Every language a post is tagged with (Bluesky allows several). Empty when it isn't tagged."""
+    tags = [post.lang, *(post.extra.get("langs") or [])]
+    return {c for c in map(lang_code, tags) if c}
+
+
+def in_language(post: Post, languages, untagged: bool = True) -> bool:
+    """True when the post is tagged with any of `languages`, or isn't tagged and `untagged` is True."""
+    wanted = {lang_code(c) for c in languages} - {""}
+    got = post_languages(post)
+    return untagged if not got else bool(got & wanted)
+
+
+def feed_languages(feed: Feed, db=None) -> list[str]:
+    """The languages a feed keeps: its own list, or the Settings choice when it has none. [] means all."""
+    if feed.languages is not None:
+        return list(feed.languages)
+    return list(db.get("languages", [])) if db is not None else []
+
+
+def pool(db, feed: Feed) -> list[Post]:
+    """The posts a feed ranks: cached candidates, cross-posts merged, other languages dropped, shared fairly."""
+    posts = cache.collapse(cache.candidates(db, feed.sources, feed.window_hours))
+    langs = feed_languages(feed, db)
+    if langs:
+        posts = [p for p in posts if in_language(p, langs)]
+    return fair_share(posts, feed.limit)
 
 
 class Ctx:
@@ -103,6 +172,16 @@ class Ctx:
     def is_mine(self, post: Post) -> bool:
         """True for posts from your own connected accounts."""
         return post.author.handle in self.my_handles
+
+    @staticmethod
+    def in_language(post: Post, *languages: str, untagged: bool = True) -> bool:
+        """True if the post is in any of these languages ("en", "fr"...); untagged posts count unless untagged=False."""
+        return in_language(post, languages, untagged)
+
+    @staticmethod
+    def languages(post: Post) -> set[str]:
+        """The languages a post is tagged with, as short codes like {"en"}. Empty when untagged."""
+        return post_languages(post)
 
     def is_muted(self, post: Post) -> bool:
         """True for authors on your muted list (they are already left out before keep() runs)."""
@@ -398,7 +477,7 @@ async def run(db, adapters, slug: str, fresh: bool = False) -> list[Ranked]:
     if hit and not fresh and time.time() - hit[0] < 120 and hit[0] > lf.mtime:
         return hit[1]
     await cache.refresh(db, adapters, lf.feed.sources)
-    posts = fair_share(cache.collapse(cache.candidates(db, lf.feed.sources, lf.feed.window_hours)), lf.feed.limit)
+    posts = pool(db, lf.feed)
     my = {a.rec.handle for a in adapters}
     ctx = Ctx(posts, my, set(db.get("muted", [])))
     try:
