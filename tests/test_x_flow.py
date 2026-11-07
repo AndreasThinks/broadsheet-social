@@ -76,7 +76,7 @@ def test_public_client_sign_in_refresh_and_post(fake):
 
     row = db.one("select * from accounts where id='x:42'")
     adapter = xapi.XAdapter(AccountRecord.from_row(row), db)
-    adapter.rec.tokens["expires_at"] = time.time() - 10
+    adapter.update_tokens(expires_at=time.time() - 10)
     results = asyncio.run(adapter.post("hello " * 60, [Upload(b"png", "image/png", alt="a cat")], thread=True))
     assert len(results) == 2 and results[0].url == "https://x.com/ada/status/t1"
     # Refreshed once, and kept the refresh token X didn't send back.

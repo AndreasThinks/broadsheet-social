@@ -36,6 +36,10 @@ class NetworkError(Exception):
     """A network call failed in a way worth showing to the user."""
 
 
+class SignInExpired(NetworkError):
+    """The network no longer accepts this account's saved sign-in; only signing in again fixes it."""
+
+
 @dataclass
 class Upload:
     data: bytes
@@ -97,6 +101,23 @@ class NetworkAdapter(ABC):
     def save_tokens(self, tokens: dict) -> None:
         self.rec.tokens = tokens
         self.db.x("update accounts set tokens=? where id=?", (encrypt_json(tokens), self.rec.id))
+
+    def reload_tokens(self) -> dict:
+        """The tokens as saved now. Several adapters for one account can be alive at once (a page load, the
+        background refresher, the notification poller), and refresh tokens are single use, so read the latest
+        before refreshing or changing them rather than trusting the copy loaded with this adapter."""
+        row = self.db.one("select tokens from accounts where id=?", (self.rec.id,))
+        if row:
+            self.rec.tokens = decrypt_json(row["tokens"])
+        return self.rec.tokens
+
+    def update_tokens(self, **changes) -> None:
+        """Change some token fields without writing back stale copies of the others."""
+        self.save_tokens({**self.reload_tokens(), **changes})
+
+    @property
+    def needs_reconnect(self) -> bool:
+        return bool(self.rec.tokens.get("needs_reconnect"))
 
     def me(self) -> Account:
         return Account(network=self.network, id=self.rec.native_id, handle=self.rec.handle,

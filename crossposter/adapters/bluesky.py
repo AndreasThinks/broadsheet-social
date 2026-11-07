@@ -12,7 +12,8 @@ from ..media import parse_og, shrink_image
 from ..models import Account, FeedInfo, LinkCard, Media, Notification, Page, Post
 from ..richtext import MENTION_RE, URL_RE, bsky_segments, build_bsky_facets, split_for_thread
 from . import bluesky_oauth as oauth
-from .base import AccountRecord, NetworkAdapter, NetworkError, PostResult, Upload, http, parse_time, save_account
+from .base import (AccountRecord, NetworkAdapter, NetworkError, PostResult, SignInExpired, Upload, http, parse_time,
+                   save_account)
 
 DISCOVER = "at://did:plc:z72i7hdynmk6r22z27h6tvur/app.bsky.feed.generator/whats-hot"
 MAX_BLOB = 976_560  # Bluesky's image size limit in bytes
@@ -151,8 +152,17 @@ class BlueskyAdapter(NetworkAdapter):
     async def _fresh_tokens(self) -> dict:
         lock = _locks.setdefault(self.account_id, asyncio.Lock())
         async with lock:
-            if self.rec.tokens.get("expires_at", 0) - 60 < time.time():
-                self.save_tokens(await oauth.refresh(self.db, self.rec.tokens))
+            # Another adapter for this account may have refreshed while we waited, which spent the refresh token
+            # we loaded with; read the saved tokens again rather than trusting our copy.
+            tokens = self.reload_tokens()
+            if tokens.get("needs_reconnect"):
+                raise SignInExpired(oauth.EXPIRED)
+            if tokens.get("expires_at", 0) - 60 < time.time():
+                try:
+                    self.save_tokens(await oauth.refresh(self.db, tokens))
+                except SignInExpired:
+                    self.update_tokens(needs_reconnect=True)
+                    raise
         return self.rec.tokens
 
     async def _req(self, method: str, nsid: str, params=None, json=None, content=None, headers=None, _retry=True):
@@ -168,12 +178,13 @@ class BlueskyAdapter(NetworkAdapter):
             new_nonce = r.headers.get("DPoP-Nonce")
             if new_nonce and new_nonce != nonce:
                 nonce = new_nonce
-                self.save_tokens({**self.rec.tokens, "pds_nonce": nonce})
+                self.update_tokens(pds_nonce=nonce)
             if r.status_code == 401 and "use_dpop_nonce" in r.headers.get("WWW-Authenticate", ""):
                 continue
             break
         if r.status_code == 401 and _retry:
-            self.save_tokens({**self.rec.tokens, "expires_at": 0})
+            if self.reload_tokens().get("access_token") == tokens["access_token"]:
+                self.update_tokens(expires_at=0)  # else someone already refreshed; just use theirs
             return await self._req(method, nsid, params, json, content, headers, _retry=False)
         if r.status_code >= 400:
             try:
