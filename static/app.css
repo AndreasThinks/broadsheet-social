@@ -344,6 +344,9 @@ a.media-item { cursor: zoom-in; }
 .acct-row { display: flex; align-items: center; gap: 12px; padding: 12px 0; border-bottom: 1px solid var(--line); min-height: 60px; }
 .acct-row .chip strong { font-family: var(--serif); font-size: 1.1rem; font-weight: 500; }
 .acct-row form { margin-left: auto; }
+.acct-row.expired .fail { color: var(--danger); font-weight: 600; }
+.acct-row.expired .reconnect + form { margin-left: 0; }
+.result li form.reconnect { display: inline; margin-left: 8px; }
 .connect { align-items: flex-end; margin-top: 12px; }
 .row.connect > label:not(.grow) { display: block; flex: 1 1 220px; }
 .checks { display: flex; flex-wrap: wrap; gap: 12px; margin: 10px 0; }

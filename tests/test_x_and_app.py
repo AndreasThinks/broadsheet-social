@@ -181,3 +181,19 @@ def test_language_setting_saves_and_shows(client):
     assert "Showing posts in English, French, Portuguese, Japanese" in page
     client.post("/settings/languages", data={}, follow_redirects=False)
     assert db.get("languages") == [] and "Showing every language." in client.get("/settings").text
+
+
+def test_expired_bluesky_sign_in_offers_reconnect(client):
+    from crossposter.adapters.base import AccountRecord, save_account
+    from crossposter.app import db
+    rec = AccountRecord(id="bluesky:did:plc:dead", network="bluesky", native_id="did:plc:dead", handle="dead.test",
+                        display_name="", avatar="", server="https://pds.example",
+                        tokens={"access_token": "a", "refresh_token": "r", "expires_at": 0, "needs_reconnect": True})
+    save_account(db, rec)
+    try:
+        page = client.get("/settings").text
+        assert "Sign-in expired" in page and "Reconnect Bluesky" in page and 'value="dead.test"' in page
+        r = client.post("/compose", data={"text": "hello", "accounts": rec.id})
+        assert "not posted" in r.text and "Reconnect Bluesky" in r.text and 'action="/auth/bluesky/start"' in r.text
+    finally:
+        db.x("delete from accounts where id=?", (rec.id,))

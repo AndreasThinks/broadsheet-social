@@ -238,11 +238,12 @@ class XAdapter(NetworkAdapter):
 
     async def _fresh(self) -> str:
         async with _lock:
-            if self.rec.tokens.get("expires_at", 0) - 60 < time.time():
-                if not self.rec.tokens.get("refresh_token"):
+            tokens = self.reload_tokens()  # X's refresh tokens are single use too; another adapter may have spent ours
+            if tokens.get("expires_at", 0) - 60 < time.time():
+                if not tokens.get("refresh_token"):
                     raise NetworkError("X session expired; please sign in again.")
                 self.save_tokens(await _token(self.db, {"grant_type": "refresh_token",
-                                               "refresh_token": self.rec.tokens["refresh_token"]}))
+                                               "refresh_token": tokens["refresh_token"]}))
         return self.rec.tokens["access_token"]
 
     async def _req(self, method: str, path: str, **kw):

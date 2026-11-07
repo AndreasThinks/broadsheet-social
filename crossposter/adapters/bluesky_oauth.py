@@ -21,7 +21,7 @@ from joserfc.jwk import ECKey
 
 from ..config import settings
 from ..crypto import b64url, pkce_pair
-from .base import NetworkError, http
+from .base import NetworkError, SignInExpired, http
 
 SCOPE = "atproto transition:generic"
 PUBLIC_API = "https://public.api.bsky.app"
@@ -183,6 +183,15 @@ def client_assertion(db, audience: str) -> dict:
             "client_assertion": token}
 
 
+class OAuthError(NetworkError):
+    def __init__(self, message: str, code: str = ""):
+        super().__init__(message)
+        self.code = code
+
+
+EXPIRED = "Your Bluesky sign-in has expired. Reconnect Bluesky to keep posting."
+
+
 async def auth_server_post(url: str, data: dict, key: ECKey, nonce: str | None) -> tuple[dict, str | None]:
     """POST to the authorization server with DPoP, retrying once with a fresh nonce."""
     for _ in range(2):
@@ -195,7 +204,8 @@ async def auth_server_post(url: str, data: dict, key: ECKey, nonce: str | None) 
                 err = r.json()
             except Exception:
                 err = {"error": r.text[:200]}
-            raise NetworkError(f"Bluesky sign-in failed: {err.get('error_description') or err.get('error')}")
+            raise OAuthError(f"Bluesky sign-in failed: {err.get('error_description') or err.get('error')}",
+                             err.get("error") or "")
         return r.json(), nonce
     raise NetworkError("Bluesky sign-in failed: DPoP nonce loop.")
 
@@ -263,11 +273,20 @@ async def finish_login(db, code: str, state: str, iss: str) -> dict:
 
 
 async def refresh(db, tokens: dict) -> dict:
+    """Swap the refresh token for new tokens. Bluesky's refresh tokens are single use: the old one stops working
+    the moment this succeeds, so the caller must save the result before anything else refreshes."""
     if not tokens.get("refresh_token"):
-        raise NetworkError("Bluesky session expired; please sign in again.")
+        raise SignInExpired(EXPIRED)
     key = ECKey.import_key(tokens["dpop_jwk"])
-    tok, nonce = await auth_server_post(tokens["token_endpoint"], {
-        "grant_type": "refresh_token", "refresh_token": tokens["refresh_token"], "client_id": client_id(),
-        **client_assertion(db, tokens["issuer"])}, key, tokens.get("as_nonce"))
+    try:
+        tok, nonce = await auth_server_post(tokens["token_endpoint"], {
+            "grant_type": "refresh_token", "refresh_token": tokens["refresh_token"], "client_id": client_id(),
+            **client_assertion(db, tokens["issuer"])}, key, tokens.get("as_nonce"))
+    except OAuthError as e:
+        # invalid_grant: the refresh token was used already, revoked, or is past its lifetime. Nothing but a new
+        # sign-in brings it back; anything else (a server hiccup) is worth trying again later.
+        if e.code == "invalid_grant" or "refresh token" in str(e).lower():
+            raise SignInExpired(EXPIRED) from e
+        raise
     return {**tokens, "access_token": tok["access_token"], "refresh_token": tok.get("refresh_token", tokens["refresh_token"]),
             "expires_at": time.time() + int(tok.get("expires_in", 300)), "as_nonce": nonce}

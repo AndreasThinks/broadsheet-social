@@ -24,6 +24,7 @@ from . import adapters as registry
 from . import cache, community, feedcheck, feeds, people, push
 from . import crosspost as xpost
 from .adapters import NetworkError, Upload
+from .adapters.base import SignInExpired
 from .adapters import bluesky as bsky
 from .adapters import bluesky_oauth, mastodon, x as xapi
 from .config import settings
@@ -740,7 +741,11 @@ async def post(req):
             handoffs.append((f"CW: {cw}\n\n{t}" if cw else t, f"{res} Your text is filled in, so you can post it on X yourself."))
             results = [r if r is not res else None for r in results]
             continue
-        if isinstance(res, Exception):
+        if isinstance(res, SignInExpired) and a.network == "bluesky":
+            rows.append(Li(badge(a.network), " ", a.rec.handle, ": ", Strong("not posted"), f" ({res})",
+                           reconnect_form(a), cls="fail"))
+            record.append({"account": a.account_id, "error": str(res)})
+        elif isinstance(res, Exception):
             rows.append(Li(badge(a.network), " ", a.rec.handle, ": ", Strong("failed"), f" ({res})", cls="fail"))
             record.append({"account": a.account_id, "error": str(res)})
         else:
@@ -1496,13 +1501,28 @@ async def post(sid: int):
 
 # ---------- settings and accounts ----------
 
+def reconnect_form(a):
+    """Sign in to Bluesky again as this account; the new sign-in replaces the dead one in place."""
+    return Form(Hidden(name="handle", value=a.rec.handle or a.rec.native_id),
+                Button("Reconnect Bluesky", cls="small primary"), method="post", action="/auth/bluesky/start",
+                cls="reconnect")
+
+
+def _acct_row(a):
+    if a.account_id.startswith("demo-"):
+        return Li(account_chip(a.me()), badge(a.network), Small("demo", cls="muted"), cls="acct-row")
+    remove = Form(Button("Remove", cls="small danger"), method="post",
+                  action=f"/accounts/remove?{urlencode({'id': a.account_id})}")
+    if a.network == "bluesky" and a.needs_reconnect:
+        return Li(account_chip(a.me()), badge(a.network), Small("Sign-in expired", cls="fail"),
+                  reconnect_form(a), remove, cls="acct-row expired")
+    return Li(account_chip(a.me()), badge(a.network), remove, cls="acct-row")
+
+
 @rt("/settings")
 async def get(error: str = "", ok: str = ""):
     accts = accounts()
-    acct_rows = [Li(account_chip(a.me()), badge(a.network),
-                    Form(Button("Remove", cls="small danger"), method="post", action=f"/accounts/remove?{urlencode({'id': a.account_id})}")
-                    if not a.account_id.startswith("demo-") else Small("demo", cls="muted"), cls="acct-row")
-                 for a in accts]
+    acct_rows = [_acct_row(a) for a in accts]
     if settings.x_enabled and not any(a.network == "x" for a in accts):
         on = xapi.handoff_enabled(db)
         acct_rows.append(Li(Span(Strong("X"), Small(" Finish on X · no sign-in needed" if on else " Off", cls="muted"),
